@@ -850,28 +850,28 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
             )
         if isinstance(step, WhileFlowStep):
             return self._render_single_body(
-                self._highlight_luau(f"While {step.condition}"), step.body_steps, depth=depth
+                f"While {step.condition}", step.body_steps, depth=depth
             )
         if isinstance(step, ForInFlowStep):
             return self._render_single_body(
-                self._highlight_luau(f"For {step.header}"), step.body_steps, depth=depth
+                f"For {step.header}", step.body_steps, depth=depth
             )
         if isinstance(step, NumericForFlowStep):
             return self._render_single_body(
-                self._highlight_luau(f"For {step.header}"), step.body_steps, depth=depth
+                f"For {step.header}", step.body_steps, depth=depth
             )
         if isinstance(step, RepeatUntilFlowStep):
             return (
                 '<div class="ns-node ns-repeat">'
-                f"{self._render_header(self._highlight_luau('Repeat'))}"
+                f"{self._render_header('Repeat')}"
                 f"{self._render_sequence(step.body_steps, depth=depth + 1)}"
-                f"{self._render_footer(self._highlight_luau(f'Until {step.condition}'))}"
+                f"{self._render_footer(f'Until {step.condition}')}"
                 "</div>"
             )
         if isinstance(step, ClosureFlowStep):
             return (
                 '<div class="ns-node ns-closure">'
-                f"{self._render_header(self._highlight_luau(step.call_label))}"
+                f"{self._render_header(step.call_label)}"
                 f'<div class="ns-closure-signature">{escape(step.signature)}</div>'
                 f"{self._render_sequence(step.body_steps, depth=depth + 1)}"
                 "</div>"
