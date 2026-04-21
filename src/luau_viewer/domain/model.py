@@ -35,6 +35,12 @@ class StructuralElementKind(StrEnum):
     LOCAL_FUNCTION = "local_function"
 
 
+class SmellSeverity(StrEnum):
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
+
+
 @dataclass(frozen=True, slots=True)
 class SourceUnitId:
     value: str
@@ -91,6 +97,15 @@ class ParseStatistics:
     structural_element_count: int
     diagnostic_count: int
     elapsed_ms: float
+
+
+@dataclass(frozen=True, slots=True)
+class Smell:
+    rule: str
+    severity: SmellSeverity
+    message: str
+    function_name: str | None = None
+    line: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

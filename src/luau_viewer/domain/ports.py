@@ -8,7 +8,13 @@ from typing import Sequence
 
 from luau_viewer.domain.control_flow import ControlFlowDiagram
 from luau_viewer.domain.events import DomainEvent
-from luau_viewer.domain.model import GrammarVersion, ParseOutcome, ParsingJob, SourceUnit
+from luau_viewer.domain.model import (
+    GrammarVersion,
+    ParseOutcome,
+    ParsingJob,
+    Smell,
+    SourceUnit,
+)
 
 
 class SourceRepository(ABC):
@@ -47,6 +53,18 @@ class ControlFlowExtractor(ABC):
 class NassiDiagramRenderer(ABC):
     @abstractmethod
     def render(self, diagram: ControlFlowDiagram) -> str:
+        raise NotImplementedError
+
+
+class SmellDetector(ABC):
+    @abstractmethod
+    def detect(
+        self,
+        diagram: ControlFlowDiagram,
+        *,
+        max_nesting_depth: int = 4,
+        max_function_steps: int = 50,
+    ) -> tuple[Smell, ...]:
         raise NotImplementedError
 
 

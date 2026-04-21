@@ -18,12 +18,19 @@ from luau_viewer.application.control_flow import (
     NassiDiagramService,
 )
 from luau_viewer.application.dto import ParseDirectoryCommand, ParseFileCommand, ParsingJobReportDTO
+from luau_viewer.application.smell_detection import (
+    DetectDirectorySmellsCommand,
+    DetectSmellsCommand,
+    SmellDetectionConfig,
+    SmellDetectionService,
+)
 from luau_viewer.application.use_cases import ParsingJobService
 from luau_viewer.domain.errors import LuauViewerError
 from luau_viewer.infrastructure.antlr.control_flow_extractor import AntlrLuauControlFlowExtractor
 from luau_viewer.infrastructure.antlr.parser_adapter import AntlrLuauSyntaxParser
 from luau_viewer.infrastructure.filesystem.source_repository import FileSystemSourceRepository
 from luau_viewer.infrastructure.rendering.nassi_html_renderer import HtmlNassiDiagramRenderer
+from luau_viewer.infrastructure.smell_detection import StepTreeSmellDetector
 from luau_viewer.infrastructure.system import (
     InMemoryParsingJobRepository,
     StructuredLoggingEventPublisher,
@@ -90,6 +97,24 @@ def main(argv: list[str] | None = None) -> int:
             ]
             print(json.dumps(payload, indent=2))
             return 0
+        elif args.command == "smell-file":
+            service = _build_smell_service(
+                max_nesting_depth=args.max_nesting_depth,
+                max_function_steps=args.max_function_steps,
+            )
+            report = service.detect_file_smells(DetectSmellsCommand(path=args.path))
+            print(json.dumps(report.to_dict(), indent=2))
+            return 0
+        elif args.command == "smell-dir":
+            service = _build_smell_service(
+                max_nesting_depth=args.max_nesting_depth,
+                max_function_steps=args.max_function_steps,
+            )
+            report = service.detect_directory_smells(
+                DetectDirectorySmellsCommand(root_path=args.path)
+            )
+            print(json.dumps(report.to_dict(), indent=2))
+            return 0
         else:
             parser.error(f"unsupported command: {args.command}")
     except LuauViewerError as error:
@@ -130,6 +155,46 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         "--out",
         help="Output directory. Defaults to <input>.nassi/.",
     )
+
+    smell_file = subparsers.add_parser(
+        "smell-file",
+        help="Detect code smells in one Luau file.",
+    )
+    smell_file.add_argument("path", help="Path to a .luau file.")
+    smell_file.add_argument(
+        "--max-nesting-depth",
+        type=int,
+        default=4,
+        dest="max_nesting_depth",
+        help="Max allowed if/else nesting depth (default: 4).",
+    )
+    smell_file.add_argument(
+        "--max-function-steps",
+        type=int,
+        default=50,
+        dest="max_function_steps",
+        help="Max allowed steps per function (default: 50).",
+    )
+
+    smell_dir = subparsers.add_parser(
+        "smell-dir",
+        help="Detect code smells in all Luau files in a directory.",
+    )
+    smell_dir.add_argument("path", help="Path to a directory.")
+    smell_dir.add_argument(
+        "--max-nesting-depth",
+        type=int,
+        default=4,
+        dest="max_nesting_depth",
+        help="Max allowed if/else nesting depth (default: 4).",
+    )
+    smell_dir.add_argument(
+        "--max-function-steps",
+        type=int,
+        default=50,
+        dest="max_function_steps",
+        help="Max allowed steps per function (default: 50).",
+    )
     return parser
 
 
@@ -148,6 +213,21 @@ def _build_nassi_service() -> NassiDiagramService:
         source_repository=FileSystemSourceRepository(),
         extractor=AntlrLuauControlFlowExtractor(),
         renderer=HtmlNassiDiagramRenderer(),
+    )
+
+
+def _build_smell_service(
+    max_nesting_depth: int = 4,
+    max_function_steps: int = 50,
+) -> SmellDetectionService:
+    return SmellDetectionService(
+        source_repository=FileSystemSourceRepository(),
+        extractor=AntlrLuauControlFlowExtractor(),
+        smell_detector=StepTreeSmellDetector(),
+        config=SmellDetectionConfig(
+            max_nesting_depth=max_nesting_depth,
+            max_function_steps=max_function_steps,
+        ),
     )
 
 
