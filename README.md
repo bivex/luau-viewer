@@ -23,6 +23,7 @@ The project starts from the domain, not from the framework:
   - numeric for loops (`for i = 1, n`)
   - generic for-in loops (`for k, v in pairs(t)`)
   - repeat-until loops
+  - closures and function calls
 
 - **Nassi-Shneiderman diagrams**
   - building NSD HTML diagrams for one file or entire directories
@@ -30,6 +31,11 @@ The project starts from the domain, not from the framework:
   - depth-coded nested ifs (up to 50 levels with color cycling and Unicode badges)
   - dark Tokyo Night-inspired theme with JetBrains Mono font
   - responsive layout
+  - syntax highlighting for Luau keywords, strings, numbers, operators, and comments
+  - collapsible function panels
+  - table of contents sidebar for files with 10+ functions
+  - shared CSS across directory bundles
+  - "Back to Index" navigation in directory mode
 
 ## Screenshot
 
@@ -88,6 +94,5 @@ The codebase is split into four explicit layers:
 - richer control flow visualization (type annotations, table destructuring)
 - symbol graph export
 - semantic passes on top of the structural model
-- interactive HTML diagrams with collapsible nodes
 - export to other diagram formats (SVG, PNG, Mermaid)
 - incremental parsing and caching
