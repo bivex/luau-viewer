@@ -37,9 +37,19 @@ The project starts from the domain, not from the framework:
   - shared CSS across directory bundles
   - "Back to Index" navigation in directory mode
 
-## Screenshot
+## Screenshots
 
-![Luau Viewer NSD screenshot](docs/screenshot.png)
+**Directory index** — generated `nassi-dir` output for [Adonis](https://github.com/Sceleratis/Adonis):
+
+![Directory index](docs/screenshot.png)
+
+**NSD diagram** — `Fun.luau` from Adonis with syntax highlighting, loops, and nested ifs:
+
+![NSD diagram](docs/screenshots/nassi_diagram.png)
+
+**Nested depth** — `Admin.luau` with depth-colored if-blocks and closures:
+
+![Nested depth](docs/screenshots/nested_depth.png)
 
 ## Quick Start
 
