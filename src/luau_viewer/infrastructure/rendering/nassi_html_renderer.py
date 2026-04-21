@@ -139,12 +139,12 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
 
     def _syntax_token_css(self) -> str:
         return """
-      .ns-token {{ }}
-      .ns-token.ns-keyword {{ color: var(--blue); }}
-      .ns-token.ns-string {{ color: var(--green); }}
-      .ns-token.ns-number {{ color: var(--orange); }}
-      .ns-token.ns-operator {{ color: var(--purple); }}
-      .ns-token.ns-comment {{ color: #6b7280; font-style: italic; }}
+      .ns-token { }
+      .ns-token.ns-keyword { color: var(--blue); }
+      .ns-token.ns-string { color: var(--green); }
+      .ns-token.ns-number { color: var(--orange); }
+      .ns-token.ns-operator { color: var(--purple); }
+      .ns-token.ns-comment { color: #6b7280; font-style: italic; }
 """
 
     def _toc_css(self) -> str:
@@ -695,7 +695,7 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
      {'<link rel="stylesheet" href="' + self.css_path + '">' if self.use_shared_css else "<style>"}
-     {self._inline_css()}
+     {"" if self.use_shared_css else self._inline_css()}
      {"</style>" if not self.use_shared_css else ""}
      <style>
        /* Collapsible panel overrides (FEAT-6) */
