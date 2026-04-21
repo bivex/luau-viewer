@@ -25,7 +25,6 @@ from luau_viewer.domain.events import (
 from luau_viewer.domain.model import ParseOutcome, ParseStatus, ParsingJob, SourceUnit
 from luau_viewer.domain.ports import (
     Clock,
-    ControlFlowExtractor,
     DomainEventPublisher,
     ParsingJobRepository,
     SourceRepository,

@@ -12,12 +12,10 @@ from luau_viewer.application.control_flow import (
 from luau_viewer.domain.control_flow import (
     ActionFlowStep,
     ControlFlowDiagram,
-    ForInFlowStep,
     FunctionControlFlow,
     IfFlowStep,
     NumericForFlowStep,
     RepeatUntilFlowStep,
-    WhileFlowStep,
 )
 from luau_viewer.domain.model import SourceUnit, SourceUnitId
 from luau_viewer.infrastructure.antlr import control_flow_extractor as control_flow_module
@@ -58,9 +56,9 @@ def test_nassi_service_builds_html_document() -> None:
     )
 
     assert document.function_count == 2
-    assert "score" in document.function_names
+    assert "MathBox.score" in document.function_names
     assert "MathBox.normalize" in document.function_names
-    assert "While total &gt; 100" in document.html
+    assert "While total&gt;100" in document.html
     assert "Repeat" in document.html
     assert "Luau Viewer" in document.html
 

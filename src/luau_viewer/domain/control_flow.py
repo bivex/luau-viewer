@@ -55,8 +55,6 @@ class FunctionControlFlow:
 
     @property
     def qualified_name(self) -> str:
-        if self.container:
-            return f"{self.container}.{self.name}"
         return self.name
 
 

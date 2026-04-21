@@ -190,7 +190,7 @@ def _try_scan_function_slice(
     start_token = tokens[func_index - 1] if is_local else tokens[func_index]
     signature_text = source_text[start_token.start : tokens[paren_close].stop + 1]
     body_text = source_text[
-        tokens[paren_close].stop + 1 : tokens[body_close_index].stop + 1
+        tokens[paren_close].stop + 1 : tokens[body_close_index].start
     ]
 
     container = _extract_container_from_name(name)
@@ -302,7 +302,6 @@ def _find_matching_end(
             lexer_type.DO,
             lexer_type.THEN,
             lexer_type.FUNCTION,
-            lexer_type.REPEAT,
         }:
             depth += 1
         elif token.type == lexer_type.END:
@@ -433,51 +432,68 @@ def _build_summarized_if_step(
     base_offset: int,
     lexer_type: object,
 ) -> ControlFlowStep:
-    then_range = _find_top_level_block(tokens, 1, lexer_type)
-    if then_range is None:
+    then_index = None
+    for i in range(1, len(tokens)):
+        if tokens[i].type == lexer_type.THEN:
+            then_index = i
+            break
+    if then_index is None:
         return ActionFlowStep(_compact_label_text(statement_text.strip()))
 
-    then_open, then_close = then_range
+    depth = 1
+    else_marker_index = None
+    end_index = None
+    for i in range(then_index + 1, len(tokens)):
+        token = tokens[i]
+        if token.type in {lexer_type.DO, lexer_type.THEN, lexer_type.FUNCTION}:
+            depth += 1
+        elif token.type == lexer_type.END:
+            depth -= 1
+            if depth == 0:
+                end_index = i
+                break
+        elif depth == 1 and token.type in {lexer_type.ELSE, lexer_type.ELSEIF}:
+            if else_marker_index is None:
+                else_marker_index = i
+
+    if end_index is None:
+        return ActionFlowStep(_compact_label_text(statement_text.strip()))
+
     condition = _compact_label_text(
-        _slice_token_text(statement_text, tokens, base_offset, 1, then_open - 1)
-    )
-    then_steps = _summarize_code_block_steps(
-        _slice_token_text(statement_text, tokens, base_offset, then_open, then_close),
-        lexer_type,
+        _slice_token_text(statement_text, tokens, base_offset, 1, then_index - 1)
     )
 
-    else_steps: tuple[ControlFlowStep, ...] = ()
-    else_index = then_close + 1
-    if else_index < len(tokens) and tokens[else_index].type == lexer_type.ELSEIF:
+    if else_marker_index is not None and tokens[else_marker_index].type == lexer_type.ELSEIF:
+        then_body = _slice_token_text(
+            statement_text, tokens, base_offset, then_index + 1, else_marker_index - 1,
+        )
+        then_steps = _summarize_code_block_steps(then_body, lexer_type) if then_body.strip() else ()
         nested_text = _slice_token_text(
-            statement_text,
-            tokens,
-            base_offset,
-            else_index,
-            len(tokens) - 1,
+            statement_text, tokens, base_offset, else_marker_index, len(tokens) - 1,
         )
         else_steps = (
             _build_summarized_structured_step(
                 nested_text,
-                tokens[else_index:],
-                tokens[else_index].start,
+                tokens[else_marker_index:],
+                tokens[else_marker_index].start,
                 lexer_type,
             ),
         )
-    elif else_index < len(tokens) and tokens[else_index].type == lexer_type.ELSE:
-        else_range = _find_top_level_block(tokens, else_index + 1, lexer_type)
-        if else_range is not None:
-            else_open, else_close = else_range
-            else_steps = _summarize_code_block_steps(
-                _slice_token_text(
-                    statement_text,
-                    tokens,
-                    base_offset,
-                    else_open,
-                    else_close,
-                ),
-                lexer_type,
-            )
+    elif else_marker_index is not None and tokens[else_marker_index].type == lexer_type.ELSE:
+        then_body = _slice_token_text(
+            statement_text, tokens, base_offset, then_index + 1, else_marker_index - 1,
+        )
+        then_steps = _summarize_code_block_steps(then_body, lexer_type) if then_body.strip() else ()
+        else_body = _slice_token_text(
+            statement_text, tokens, base_offset, else_marker_index + 1, end_index - 1,
+        )
+        else_steps = _summarize_code_block_steps(else_body, lexer_type) if else_body.strip() else ()
+    else:
+        then_body = _slice_token_text(
+            statement_text, tokens, base_offset, then_index + 1, end_index - 1,
+        )
+        then_steps = _summarize_code_block_steps(then_body, lexer_type) if then_body.strip() else ()
+        else_steps = ()
 
     return IfFlowStep(
         condition=condition or "condition",
@@ -556,13 +572,12 @@ def _build_summarized_repeat_until_step(
     base_offset: int,
     lexer_type: object,
 ) -> ControlFlowStep:
-    end_index = _find_matching_end_from(tokens, 0, lexer_type)
-    if end_index is None:
+    until_index = _find_matching_until(tokens, 1, lexer_type)
+    if until_index is None:
         return ActionFlowStep(_compact_label_text(statement_text.strip()))
 
-    until_index = end_index + 1
     condition = ""
-    if until_index < len(tokens) and tokens[until_index].type == lexer_type.UNTIL:
+    if until_index + 1 < len(tokens):
         condition = _compact_label_text(
             _slice_token_text(
                 statement_text,
@@ -573,12 +588,13 @@ def _build_summarized_repeat_until_step(
             ).removesuffix(";")
         )
 
+    body_text = _slice_token_text(statement_text, tokens, base_offset, 1, until_index - 1)
     return RepeatUntilFlowStep(
         condition=condition or "condition",
         body_steps=_summarize_code_block_steps(
-            _slice_token_text(statement_text, tokens, base_offset, 1, end_index - 1),
+            body_text,
             lexer_type,
-        ),
+        ) if body_text.strip() else (),
     )
 
 
@@ -604,7 +620,7 @@ def _find_top_level_block(
 ) -> tuple[int, int] | None:
     for index in range(start_index, len(tokens)):
         token = tokens[index]
-        if token.type == lexer_type.DO:
+        if token.type in {lexer_type.DO, lexer_type.THEN}:
             close_index = _find_matching_end(tokens, index, lexer_type)
             if close_index is not None:
                 return index, close_index
@@ -612,17 +628,17 @@ def _find_top_level_block(
     return None
 
 
-def _find_matching_end_from(
+def _find_matching_until(
     tokens: tuple[object, ...],
     start_index: int,
     lexer_type: object,
 ) -> int | None:
-    depth = 0
+    depth = 1
     for index in range(start_index, len(tokens)):
         token = tokens[index]
-        if token.type in {lexer_type.DO, lexer_type.FUNCTION, lexer_type.REPEAT}:
+        if token.type == lexer_type.REPEAT:
             depth += 1
-        elif token.type == lexer_type.END:
+        elif token.type == lexer_type.UNTIL:
             depth -= 1
             if depth == 0:
                 return index
@@ -672,12 +688,13 @@ def _split_top_level_statement_spans(
             paren_depth += 1
         elif token.type == lexer_type.RPAREN:
             paren_depth = max(paren_depth - 1, 0)
-        elif token.type in {lexer_type.DO, lexer_type.FUNCTION, lexer_type.REPEAT}:
+        elif token.type in {lexer_type.DO, lexer_type.THEN, lexer_type.FUNCTION, lexer_type.REPEAT}:
             depth += 1
         elif token.type == lexer_type.END:
             depth -= 1
-        elif token.type == lexer_type.UNTIL and depth == 0:
-            pass
+        elif token.type == lexer_type.UNTIL:
+            if depth > 0:
+                depth -= 1
 
         next_token = tokens[index + 1] if index + 1 < len(tokens) else None
         at_statement_end = False
@@ -830,7 +847,6 @@ def _build_control_flow_visitor(visitor_base: type, context: _ExtractorContext) 
                 return None
             if len(steps) == 1:
                 return steps[0]
-            from luau_viewer.domain.control_flow import ActionFlowStep
             return None
 
         def _extract_if_stat(self, if_ctx) -> IfFlowStep:

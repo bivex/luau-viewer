@@ -9,7 +9,6 @@ from enum import StrEnum
 from luau_viewer.domain.errors import (
     DuplicateSourceUnitError,
     EmptyParsingJobError,
-    LuauViewerError,
     ParsingJobAlreadyCompletedError,
     ParsingJobNotCompleteError,
     UnknownSourceUnitError,
