@@ -9,20 +9,20 @@ from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
-from swifta.application.control_flow import (
+from luau_viewer.application.control_flow import (
     BuildNassiDiagramCommand,
     BuildNassiDirectoryCommand,
     NassiDiagramBundleDTO,
     NassiDiagramService,
 )
-from swifta.application.dto import ParseDirectoryCommand, ParseFileCommand, ParsingJobReportDTO
-from swifta.application.use_cases import ParsingJobService
-from swifta.domain.errors import SwiftaError
-from swifta.infrastructure.antlr.control_flow_extractor import AntlrSwiftControlFlowExtractor
-from swifta.infrastructure.antlr.parser_adapter import AntlrSwiftSyntaxParser
-from swifta.infrastructure.filesystem.source_repository import FileSystemSourceRepository
-from swifta.infrastructure.rendering.nassi_html_renderer import HtmlNassiDiagramRenderer
-from swifta.infrastructure.system import (
+from luau_viewer.application.dto import ParseDirectoryCommand, ParseFileCommand, ParsingJobReportDTO
+from luau_viewer.application.use_cases import ParsingJobService
+from luau_viewer.domain.errors import LuauViewerError
+from luau_viewer.infrastructure.antlr.control_flow_extractor import AntlrLuauControlFlowExtractor
+from luau_viewer.infrastructure.antlr.parser_adapter import AntlrLuauSyntaxParser
+from luau_viewer.infrastructure.filesystem.source_repository import FileSystemSourceRepository
+from luau_viewer.infrastructure.rendering.nassi_html_renderer import HtmlNassiDiagramRenderer
+from luau_viewer.infrastructure.system import (
     InMemoryParsingJobRepository,
     StructuredLoggingEventPublisher,
     SystemClock,
@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         else:
             parser.error(f"unsupported command: {args.command}")
-    except SwiftaError as error:
+    except LuauViewerError as error:
         print(json.dumps({"error": str(error)}, indent=2), file=sys.stderr)
         return 2
 
@@ -91,21 +91,21 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Parse Swift source code with ANTLR.")
+    parser = argparse.ArgumentParser(description="Parse Luau source code with ANTLR.")
     parser.add_argument("--verbose", action="store_true", help="Enable lifecycle logging.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    parse_file = subparsers.add_parser("parse-file", help="Parse one Swift file.")
-    parse_file.add_argument("path", help="Path to a .swift file.")
+    parse_file = subparsers.add_parser("parse-file", help="Parse one Luau file.")
+    parse_file.add_argument("path", help="Path to a .luau file.")
 
-    parse_dir = subparsers.add_parser("parse-dir", help="Parse all Swift files in a directory.")
+    parse_dir = subparsers.add_parser("parse-dir", help="Parse all Luau files in a directory.")
     parse_dir.add_argument("path", help="Path to a directory.")
 
     nassi_file = subparsers.add_parser(
         "nassi-file",
-        help="Build a Nassi-Shneiderman HTML diagram for one Swift file.",
+        help="Build a Nassi-Shneiderman HTML diagram for one Luau file.",
     )
-    nassi_file.add_argument("path", help="Path to a .swift file.")
+    nassi_file.add_argument("path", help="Path to a .luau file.")
     nassi_file.add_argument(
         "--out",
         help="Output HTML path. Defaults to <input>.nassi.html.",
@@ -113,7 +113,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
 
     nassi_dir = subparsers.add_parser(
         "nassi-dir",
-        help="Build Nassi-Shneiderman HTML diagrams for all Swift files in a directory.",
+        help="Build Nassi-Shneiderman HTML diagrams for all Luau files in a directory.",
     )
     nassi_dir.add_argument("path", help="Path to a directory.")
     nassi_dir.add_argument(
@@ -126,7 +126,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
 def _build_parse_service() -> ParsingJobService:
     return ParsingJobService(
         source_repository=FileSystemSourceRepository(),
-        parser=AntlrSwiftSyntaxParser(),
+        parser=AntlrLuauSyntaxParser(),
         event_publisher=StructuredLoggingEventPublisher(),
         clock=SystemClock(),
         job_repository=InMemoryParsingJobRepository(),
@@ -136,7 +136,7 @@ def _build_parse_service() -> ParsingJobService:
 def _build_nassi_service() -> NassiDiagramService:
     return NassiDiagramService(
         source_repository=FileSystemSourceRepository(),
-        extractor=AntlrSwiftControlFlowExtractor(),
+        extractor=AntlrLuauControlFlowExtractor(),
         renderer=HtmlNassiDiagramRenderer(),
     )
 
@@ -222,7 +222,7 @@ def _render_directory_index(
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Swifta NSD Index</title>
+    <title>Luau Viewer NSD Index</title>
     <style>
       :root {{
         --line: #22364d;
@@ -328,7 +328,7 @@ def _render_directory_index(
   </head>
   <body>
     <div class="window">
-      <div class="titlebar">Swifta NSD Index</div>
+      <div class="titlebar">Luau Viewer NSD Index</div>
       <div class="body">
         <p class="meta">{escape(root_path)}</p>
         <table>

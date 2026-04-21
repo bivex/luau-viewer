@@ -6,21 +6,17 @@ from html import escape
 from math import ceil
 import re
 
-from swifta.domain.control_flow import (
+from luau_viewer.domain.control_flow import (
     ActionFlowStep,
     ControlFlowDiagram,
     ControlFlowStep,
-    DeferFlowStep,
-    DoCatchFlowStep,
     ForInFlowStep,
-    GuardFlowStep,
     IfFlowStep,
-    RepeatWhileFlowStep,
-    SwitchCaseFlow,
-    SwitchFlowStep,
+    NumericForFlowStep,
+    RepeatUntilFlowStep,
     WhileFlowStep,
 )
-from swifta.domain.ports import NassiDiagramRenderer
+from luau_viewer.domain.ports import NassiDiagramRenderer
 
 
 class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
@@ -90,10 +86,6 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
 
         /* Block fills */
         --loop-fill:   #132033;
-        --switch-fill: #102529;
-        --guard-fill:  #23190c;
-        --do-fill:     #1a1624;
-        --defer-fill:  #241d0d;
         --yes-fill:    #102217;
         --no-fill:     #251019;
         --action-fill: var(--surface-2);
@@ -239,9 +231,7 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
         width: max-content;
         min-width: 100%;
       }}
-      .ns-sequence > .ns-node + .ns-node,
-      .ns-cases > .case + .case,
-      .ns-catches > .ns-node + .ns-node {{
+      .ns-sequence > .ns-node + .ns-node {{
         margin-top: -1px;
       }}
       .ns-node {{
@@ -252,8 +242,7 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
       }}
       /* ── Block headers/footers ── */
       .ns-header,
-      .ns-footer,
-      .case-title {{
+      .ns-footer {{
         padding: 7px 12px;
         background:
           linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0)),
@@ -293,26 +282,12 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
         overflow-wrap: anywhere;
       }}
       /* ── Block type colours ── */
-      .ns-guard   {{ background: var(--guard-fill); }}
       .ns-loop,
       .ns-repeat  {{ background: var(--loop-fill); }}
-      .ns-switch  {{ background: var(--switch-fill); }}
-      .ns-do-catch {{ background: var(--do-fill); }}
-      .ns-defer   {{ background: var(--defer-fill); }}
-
-      .ns-guard   > .ns-header {{ background: var(--orange-dim); color: var(--orange); }}
-      .ns-switch  > .ns-header,
-      .case-title              {{ background: var(--teal-dim);   color: var(--teal);   }}
-      .ns-do-catch > .ns-header {{ background: var(--purple-dim); color: var(--purple); }}
-      .ns-defer   > .ns-header {{ background: var(--amber-dim);  color: var(--amber);  }}
 
       /* Left accent stripes */
       .ns-node.ns-loop,
       .ns-node.ns-repeat  {{ border-left: 3px solid var(--blue); }}
-      .ns-node.ns-guard   {{ border-left: 3px solid var(--orange); }}
-      .ns-node.ns-switch  {{ border-left: 3px solid var(--teal); }}
-      .ns-node.ns-do-catch {{ border-left: 3px solid var(--purple); }}
-      .ns-node.ns-defer   {{ border-left: 3px solid var(--amber); }}
 
       /* Depth tinting */
       .ns-depth-1 > .ns-node {{ background-color: rgba(255,255,255,0.012); }}
@@ -366,58 +341,6 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
         fill: var(--red);
         text-transform: uppercase;
         letter-spacing: 0.06em;
-      }}
-
-      /* ── Switch/case (classic NS diagram) ── */
-      .ns-switch-header {{
-        padding: 9px 12px;
-        background:
-          linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0)),
-          var(--teal-dim);
-        color: var(--text-bright);
-        font-family: var(--mono);
-        font-size: 12px;
-        font-weight: 500;
-        border-bottom: 1px solid var(--border-strong);
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }}
-      .ns-switch-cases {{
-        display: grid;
-        grid-auto-flow: column;
-        grid-auto-columns: minmax(140px, max-content);
-        background: var(--bg);
-        width: max-content;
-        min-width: 100%;
-      }}
-      .ns-switch-case-col {{
-        border-right: 1px solid var(--border);
-        min-width: 140px;
-        display: flex;
-        flex-direction: column;
-      }}
-      .ns-switch-case-col:last-child {{
-        border-right: none;
-      }}
-      .ns-switch-case-value {{
-        padding: 9px 12px;
-        background: rgba(16, 24, 39, 0.86);
-        color: var(--teal);
-        font-family: var(--mono);
-        font-size: 11px;
-        font-weight: 600;
-        border-bottom: 1px solid var(--border-strong);
-        text-align: center;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-      }}
-      .ns-switch-case-body {{
-        padding: 0;
-        background: var(--bg);
-        min-height: 40px;
-      }}
-      .ns-switch-case-body .ns-sequence {{
-        padding: 8px;
       }}
 
       /* Depth-coded if-cap triangles and diagonals (0-50, cycling blue→green→purple→teal→amber) */
@@ -476,10 +399,6 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
         text-transform: uppercase;
         letter-spacing: 0.08em;
       }}
-      .ns-cases {{ background: var(--surface-2); }}
-      .case {{ border-top: 1px solid var(--border); }}
-      .case:first-child {{ border-top: 0; }}
-      .ns-catches {{ border-top: 1px solid var(--border); }}
 
       .empty {{
         color: var(--muted);
@@ -535,7 +454,7 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
     <div class="viewer">
       <div class="titlebar">
         <div class="titlebar-icon"></div>
-        <span class="titlebar-text">Swifta · NSD Viewer</span>
+        <span class="titlebar-text">Luau Viewer · NSD Viewer</span>
       </div>
       <div class="toolbar">
         <span class="toolbar-label">Nassi-Shneiderman</span>
@@ -601,57 +520,21 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
                 f"{trailing_note}"
                 "</div>"
             )
-        if isinstance(step, GuardFlowStep):
-            return (
-                '<div class="ns-node ns-guard">'
-                f"{self._render_header(f'Guard {step.condition}')}"
-                '<div class="ns-branch ns-branch-no"><div class="ns-branch-title">Failure / exit</div>'
-                f"{self._render_sequence(step.else_steps, depth=depth + 1)}"
-                "</div>"
-                "</div>"
-            )
         if isinstance(step, WhileFlowStep):
             return self._render_single_body(f"While {step.condition}", step.body_steps, depth=depth)
         if isinstance(step, ForInFlowStep):
             return self._render_single_body(f"For {step.header}", step.body_steps, depth=depth)
-        if isinstance(step, RepeatWhileFlowStep):
+        if isinstance(step, NumericForFlowStep):
+            return self._render_single_body(f"For {step.header}", step.body_steps, depth=depth)
+        if isinstance(step, RepeatUntilFlowStep):
             return (
                 '<div class="ns-node ns-repeat">'
                 f"{self._render_header('Repeat')}"
                 f"{self._render_sequence(step.body_steps, depth=depth + 1)}"
-                f"{self._render_footer(f'While {step.condition}')}"
+                f"{self._render_footer(f'Until {step.condition}')}"
                 "</div>"
             )
-        if isinstance(step, SwitchFlowStep):
-            return self._render_switch(step, depth=depth)
-        if isinstance(step, DoCatchFlowStep):
-            catches = "".join(
-                self._render_single_body(
-                    f"Catch {catch.pattern}",
-                    catch.steps,
-                    depth=depth + 1,
-                    css_class="ns-do-catch",
-                )
-                for catch in step.catches
-            )
-            return (
-                '<div class="ns-node ns-do-catch">'
-                f"{self._render_header('Do')}"
-                f"{self._render_sequence(step.body_steps, depth=depth + 1)}"
-                f'<div class="ns-catches">{catches}</div>'
-                "</div>"
-            )
-        if isinstance(step, DeferFlowStep):
-            return self._render_single_body("Defer", step.body_steps, depth=depth, css_class="ns-defer")
         raise TypeError(f"unsupported step type: {type(step)!r}")
-
-    def _render_case(self, case: SwitchCaseFlow) -> str:
-        return (
-            '<div class="case">'
-            f"{self._render_case_title(case.label)}"
-            f"{self._render_sequence(case.steps, depth=2)}"
-            "</div>"
-        )
 
     def _render_single_body(
         self,
@@ -730,50 +613,6 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
             "</div>"
         )
 
-    def _render_switch(self, step: SwitchFlowStep, *, depth: int) -> str:
-        case_count = len(step.cases)
-        if case_count == 0:
-            return (
-                '<div class="ns-node ns-switch">'
-                f"{self._render_header(f'Switch {step.expression}')}"
-                '<div class="empty">No cases.</div>'
-                "</div>"
-            )
-
-        # Build case columns with values on top, bodies below
-        cases_html = []
-        for case in step.cases:
-            label = self._normalize_case_label(case.label.strip())
-            cases_html.append(
-                f'<div class="ns-switch-case-col" aria-label="{escape(label)}">'
-                f'<div class="ns-switch-case-value">{escape(label)}</div>'
-                f'<div class="ns-switch-case-body">{self._render_sequence(case.steps, depth=depth + 1)}</div>'
-                "</div>"
-            )
-
-        d = min(depth, 50)
-        badge = self._depth_badge(d)
-
-        return (
-            f'<div class="ns-node ns-switch ns-if-depth-{d}">'
-            f'<div class="ns-switch-header">{badge} switch {escape(step.expression)}</div>'
-            f'<div class="ns-switch-cases">{"".join(cases_html)}</div>'
-            "</div>"
-        )
-
     def _render_footer(self, title: str) -> str:
         escaped = escape(title)
         return f'<div class="ns-footer" aria-label="{escaped}">{escaped}</div>'
-
-    def _render_case_title(self, label: str) -> str:
-        text = self._normalize_case_label(label.strip())
-        escaped = escape(text)
-        return f'<div class="case-title" aria-label="{escaped}">{escaped}</div>'
-
-    def _normalize_case_label(self, label: str) -> str:
-        compact = label.removesuffix(":").strip()
-        if compact.startswith("default"):
-            return "default"
-        if compact.startswith("case "):
-            return compact
-        return compact

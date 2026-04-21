@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from antlr4.error.ErrorListener import ErrorListener
 
-from swifta.domain.model import DiagnosticSeverity, SyntaxDiagnostic
+from luau_viewer.domain.model import DiagnosticSeverity, SyntaxDiagnostic
 
 
 class CollectingErrorListener(ErrorListener):

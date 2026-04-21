@@ -1,0 +1,3 @@
+[submodule "resources/grammars/luau"]
+	path = resources/grammars/luau
+	url = https://github.com/bivex/luau-grammar-antlr4.git

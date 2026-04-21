@@ -6,9 +6,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
-from swifta.domain.errors import (
+from luau_viewer.domain.errors import (
     DuplicateSourceUnitError,
     EmptyParsingJobError,
+    LuauViewerError,
     ParsingJobAlreadyCompletedError,
     ParsingJobNotCompleteError,
     UnknownSourceUnitError,
@@ -32,11 +33,7 @@ class StructuralElementKind(StrEnum):
     CONSTANT = "constant"
     VARIABLE = "variable"
     FUNCTION = "function"
-    ENUM = "enum"
-    STRUCT = "struct"
-    CLASS = "class"
-    PROTOCOL = "protocol"
-    EXTENSION = "extension"
+    LOCAL_FUNCTION = "local_function"
 
 
 @dataclass(frozen=True, slots=True)

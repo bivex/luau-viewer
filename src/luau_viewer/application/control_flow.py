@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from swifta.domain.ports import NassiDiagramRenderer, SourceRepository, SwiftControlFlowExtractor
+from luau_viewer.domain.ports import ControlFlowExtractor, NassiDiagramRenderer, SourceRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +50,7 @@ class NassiDiagramBundleDTO:
 @dataclass(slots=True)
 class NassiDiagramService:
     source_repository: SourceRepository
-    extractor: SwiftControlFlowExtractor
+    extractor: ControlFlowExtractor
     renderer: NassiDiagramRenderer
 
     def build_file_diagram(self, command: BuildNassiDiagramCommand) -> NassiDiagramDocumentDTO:
@@ -58,7 +58,7 @@ class NassiDiagramService:
         return self._build_document(source_unit)
 
     def build_directory_diagrams(self, command: BuildNassiDirectoryCommand) -> NassiDiagramBundleDTO:
-        source_units = tuple(self.source_repository.list_swift_sources(command.root_path))
+        source_units = tuple(self.source_repository.list_sources(command.root_path))
         documents = tuple(self._build_document(source_unit) for source_unit in source_units)
         return NassiDiagramBundleDTO(
             root_path=str(Path(command.root_path).expanduser().resolve()),

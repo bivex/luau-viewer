@@ -10,13 +10,13 @@ from antlr4.atn.PredictionMode import PredictionMode
 from antlr4.error.ErrorStrategy import BailErrorStrategy
 from antlr4.error.Errors import ParseCancellationException
 
-from swifta.domain.errors import GeneratedParserNotAvailableError
-from swifta.domain.model import GrammarVersion, SyntaxDiagnostic
-from swifta.infrastructure.antlr.error_listener import CollectingErrorListener
+from luau_viewer.domain.errors import GeneratedParserNotAvailableError
+from luau_viewer.domain.model import GrammarVersion, SyntaxDiagnostic
+from luau_viewer.infrastructure.antlr.error_listener import CollectingErrorListener
 
 
 ANTLR_GRAMMAR_VERSION = GrammarVersion(
-    "antlr4@4.13.2+python-compat:antlr/grammars-v4/swift/swift5 (targets Swift 5.4)"
+    "antlr4@4.13.2+python-compat:bivex/luau-grammar-antlr4 (targets Luau)"
 )
 
 
@@ -38,24 +38,24 @@ class ParseTreeResult:
 def load_generated_types() -> GeneratedParserTypes:
     try:
         lexer_module = importlib.import_module(
-            "swifta.infrastructure.antlr.generated.swift5.Swift5Lexer"
+            "luau_viewer.infrastructure.antlr.generated.luau.LuauLexer"
         )
         parser_module = importlib.import_module(
-            "swifta.infrastructure.antlr.generated.swift5.Swift5Parser"
+            "luau_viewer.infrastructure.antlr.generated.luau.LuauParser"
         )
         visitor_module = importlib.import_module(
-            "swifta.infrastructure.antlr.generated.swift5.Swift5ParserVisitor"
+            "luau_viewer.infrastructure.antlr.generated.luau.LuauVisitor"
         )
     except ModuleNotFoundError as error:
         raise GeneratedParserNotAvailableError(
-            "generated Swift parser artifacts are missing; run "
-            "`uv run python scripts/generate_swift_parser.py` first"
+            "generated Luau parser artifacts are missing; run "
+            "`uv run python scripts/generate_luau_parser.py` first"
         ) from error
 
     return GeneratedParserTypes(
-        lexer_type=lexer_module.Swift5Lexer,
-        parser_type=parser_module.Swift5Parser,
-        visitor_type=visitor_module.Swift5ParserVisitor,
+        lexer_type=lexer_module.LuauLexer,
+        parser_type=parser_module.LuauParser,
+        visitor_type=visitor_module.LuauVisitor,
     )
 
 
@@ -65,7 +65,7 @@ def parse_source_text(
 ) -> ParseTreeResult:
     return _parse_entry_text(
         source_text,
-        entry_rule_name="top_level",
+        entry_rule_name="chunk",
         generated_types=generated_types,
     )
 
@@ -76,7 +76,7 @@ def parse_code_block_text(
 ) -> ParseTreeResult:
     return _parse_entry_text(
         source_text,
-        entry_rule_name="code_block",
+        entry_rule_name="block",
         generated_types=generated_types,
     )
 
@@ -87,7 +87,7 @@ def parse_statement_text(
 ) -> ParseTreeResult:
     return _parse_entry_text(
         source_text,
-        entry_rule_name="statement",
+        entry_rule_name="stat",
         generated_types=generated_types,
     )
 
