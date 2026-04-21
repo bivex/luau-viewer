@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from luau_viewer.domain.control_flow import (
@@ -40,6 +41,11 @@ class StepTreeSmellDetector(SmellDetector):
             self._check_duplicate_condition(function.steps, function.name, smells)
             self._check_identical_actions(function.steps, function.name, smells)
             self._check_nested_loops(function.steps, 0, function.name, smells)
+            _check_self_assignment(function.steps, function.name, smells)
+            _check_empty_loop(function.steps, function.name, smells)
+            _check_redundant_condition(function.steps, function.name, smells)
+            _check_complex_condition(function.steps, function.name, smells)
+            _check_nested_closures(function.steps, 0, function.name, smells)
         return tuple(smells)
 
     # -- Rule: empty-function --
@@ -333,6 +339,133 @@ class StepTreeSmellDetector(SmellDetector):
 
 
 _DEPRECATED_CALLS = ("spawn(", "delay(", "wait(")
+_SELF_ASSIGN_RE = re.compile(r"(?P<left>[\w.:\[\]]+)\s*=\s*(?P<right>[\w.:\[\]]+)\s*$")
+
+
+def _check_self_assignment(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            label = step.label.strip()
+            # Match "x = x" or "x.y = x.y" — left side equals right side
+            m = _SELF_ASSIGN_RE.match(label)
+            if m and m.group("left").strip() == m.group("right").strip():
+                smells.append(Smell(
+                    rule="self-assignment",
+                    severity=SmellSeverity.ERROR,
+                    message=f"Self-assignment in function '{function_name}': {label[:60]} — variable assigns to itself",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _check_self_assignment(step.then_steps, function_name, smells)
+            _check_self_assignment(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_self_assignment(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_self_assignment(step.body_steps, function_name, smells)
+
+
+def _check_empty_loop(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            if len(step.body_steps) == 0:
+                header = getattr(step, "header", None) or getattr(step, "condition", "")
+                smells.append(Smell(
+                    rule="empty-loop",
+                    severity=SmellSeverity.WARNING,
+                    message=f"Empty loop body in function '{function_name}': {type(step).__name__} ({header.strip()[:40]})",
+                    function_name=function_name,
+                ))
+            _check_empty_loop(step.body_steps, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_empty_loop(step.then_steps, function_name, smells)
+            _check_empty_loop(step.else_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_empty_loop(step.body_steps, function_name, smells)
+
+
+def _check_redundant_condition(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, IfFlowStep):
+            cond = step.condition.strip().lower()
+            if cond in ("true", "false"):
+                smells.append(Smell(
+                    rule="redundant-condition",
+                    severity=SmellSeverity.WARNING,
+                    message=f"Hard-coded '{step.condition.strip()}' condition in function '{function_name}' — dead code or debug leftover",
+                    function_name=function_name,
+                ))
+            _check_redundant_condition(step.then_steps, function_name, smells)
+            _check_redundant_condition(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            cond = getattr(step, "condition", "").strip().lower()
+            if cond == "false" and isinstance(step, WhileFlowStep):
+                smells.append(Smell(
+                    rule="redundant-condition",
+                    severity=SmellSeverity.WARNING,
+                    message=f"'while false' in function '{function_name}' — loop never executes",
+                    function_name=function_name,
+                ))
+            _check_redundant_condition(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_redundant_condition(step.body_steps, function_name, smells)
+
+
+def _check_complex_condition(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, IfFlowStep):
+            if len(step.condition) > 80:
+                smells.append(Smell(
+                    rule="complex-condition",
+                    severity=SmellSeverity.INFO,
+                    message=f"Complex condition ({len(step.condition)} chars) in function '{function_name}' — extract to a named variable",
+                    function_name=function_name,
+                ))
+            _check_complex_condition(step.then_steps, function_name, smells)
+            _check_complex_condition(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_complex_condition(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_complex_condition(step.body_steps, function_name, smells)
+
+
+def _check_nested_closures(
+    steps: tuple[ControlFlowStep, ...],
+    depth: int,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ClosureFlowStep):
+            new_depth = depth + 1
+            if new_depth > 1:
+                smells.append(Smell(
+                    rule="nested-closures",
+                    severity=SmellSeverity.WARNING,
+                    message=f"{new_depth} nested closures in function '{function_name}' — callback hell, refactor with named functions",
+                    function_name=function_name,
+                ))
+            _check_nested_closures(step.body_steps, new_depth, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_nested_closures(step.then_steps, depth, function_name, smells)
+            _check_nested_closures(step.else_steps, depth, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_nested_closures(step.body_steps, depth, function_name, smells)
 
 
 def _count_total_steps(steps: tuple[ControlFlowStep, ...]) -> int:

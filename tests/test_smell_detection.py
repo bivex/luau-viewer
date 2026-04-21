@@ -2,6 +2,7 @@ import pytest
 
 from luau_viewer.domain.control_flow import (
     ActionFlowStep,
+    ClosureFlowStep,
     ControlFlowDiagram,
     ForInFlowStep,
     FunctionControlFlow,
@@ -355,3 +356,148 @@ def test_double_nested_loops_ok():
     smells = detector.detect(diag)
     rules = [s.rule for s in smells]
     assert "nested-loops" not in rules
+
+
+# -- self-assignment --
+
+def test_self_assignment_detected():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="x = x"),
+    ))
+    smells = detector.detect(diag)
+    sa = [s for s in smells if s.rule == "self-assignment"]
+    assert len(sa) == 1
+    assert sa[0].severity == SmellSeverity.ERROR
+
+
+def test_self_assignment_with_index():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="data[i] = data[i]"),
+    ))
+    smells = detector.detect(diag)
+    sa = [s for s in smells if s.rule == "self-assignment"]
+    assert len(sa) == 1
+
+
+def test_normal_assignment_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="x = y + 1"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "self-assignment" not in rules
+
+
+# -- empty-loop --
+
+def test_empty_while_loop():
+    diag = _diagram(_func("f",
+        WhileFlowStep(condition="running", body_steps=()),
+    ))
+    smells = detector.detect(diag)
+    el = [s for s in smells if s.rule == "empty-loop"]
+    assert len(el) == 1
+
+
+def test_empty_for_loop():
+    diag = _diagram(_func("f",
+        ForInFlowStep(header="i = 1, 10", body_steps=()),
+    ))
+    smells = detector.detect(diag)
+    el = [s for s in smells if s.rule == "empty-loop"]
+    assert len(el) == 1
+
+
+def test_non_empty_loop_not_flagged():
+    diag = _diagram(_func("f",
+        WhileFlowStep(condition="running", body_steps=(ActionFlowStep(label="x = 1"),)),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "empty-loop" not in rules
+
+
+# -- redundant-condition --
+
+def test_if_true_detected():
+    diag = _diagram(_func("f",
+        IfFlowStep(condition="true", then_steps=(ActionFlowStep(label="x = 1"),), else_steps=()),
+    ))
+    smells = detector.detect(diag)
+    rc = [s for s in smells if s.rule == "redundant-condition"]
+    assert len(rc) == 1
+    assert "true" in rc[0].message
+
+
+def test_if_false_detected():
+    diag = _diagram(_func("f",
+        IfFlowStep(condition="false", then_steps=(ActionFlowStep(label="x = 1"),), else_steps=()),
+    ))
+    smells = detector.detect(diag)
+    rc = [s for s in smells if s.rule == "redundant-condition"]
+    assert len(rc) == 1
+    assert "false" in rc[0].message
+
+
+def test_normal_condition_not_flagged():
+    diag = _diagram(_func("f",
+        IfFlowStep(condition="x > 0", then_steps=(ActionFlowStep(label="y = 1"),), else_steps=()),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "redundant-condition" not in rules
+
+
+# -- complex-condition --
+
+def test_complex_condition_detected():
+    long_cond = "x > 0 and y < 100 and z ~= nil and a == true and b == false and c ~= d and e >= f"
+    diag = _diagram(_func("f",
+        IfFlowStep(condition=long_cond, then_steps=(ActionFlowStep(label="ok"),), else_steps=()),
+    ))
+    smells = detector.detect(diag)
+    cc = [s for s in smells if s.rule == "complex-condition"]
+    assert len(cc) == 1
+    assert cc[0].severity == SmellSeverity.INFO
+
+
+def test_short_condition_not_flagged():
+    diag = _diagram(_func("f",
+        IfFlowStep(condition="x > 0", then_steps=(ActionFlowStep(label="ok"),), else_steps=()),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "complex-condition" not in rules
+
+
+# -- nested-closures --
+
+def test_nested_closures_detected():
+    inner = ClosureFlowStep(
+        call_label="task.delay(1, function()",
+        signature="function()",
+        body_steps=(ActionFlowStep(label="print('inner')"),),
+    )
+    outer = ClosureFlowStep(
+        call_label="task.spawn(function()",
+        signature="function()",
+        body_steps=(inner,),
+    )
+    diag = _diagram(_func("f", outer))
+    smells = detector.detect(diag)
+    nc = [s for s in smells if s.rule == "nested-closures"]
+    assert len(nc) == 1
+    assert "2 nested" in nc[0].message
+
+
+def test_single_closure_not_flagged():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="task.spawn(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="print('ok')"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "nested-closures" not in rules

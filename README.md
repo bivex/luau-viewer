@@ -115,6 +115,7 @@ Detected from the control flow step tree — no raw text analysis.
 | Smell | Severity | Trigger |
 |-------|:--------:|---------|
 | `unreachable` | ERROR | Steps after `return`/`break`/`continue` in same sequence |
+| `self-assignment` | ERROR | Variable assigns to itself (`x = x`) |
 | `identical-actions` | WARNING | Same action repeated consecutively — copy-paste error |
 | `duplicate-condition` | WARNING | Same `if` condition twice in a row — copy-paste error |
 | `empty-then` | WARNING | `if` with empty then body |
@@ -124,6 +125,10 @@ Detected from the control flow step tree — no raw text analysis.
 | `long-function` | WARNING | Function exceeds step threshold (default: 50) |
 | `deprecated-api` | WARNING | `spawn()`, `delay()`, `wait()` instead of `task.*` |
 | `wait-in-loop` | WARNING | Any `wait` inside loop body (performance hit in Roblox) |
+| `empty-loop` | WARNING | Loop with empty body |
+| `redundant-condition` | WARNING | Hard-coded `true`/`false` condition |
+| `nested-closures` | WARNING | Nested anonymous functions — callback hell |
+| `complex-condition` | INFO | Condition exceeds 80 chars — extract to variable |
 | `empty-function` | INFO | Function with zero steps |
 
 ### CLI flags
