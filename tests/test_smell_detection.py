@@ -288,3 +288,70 @@ def test_smells_fixture():
     assert "infinite-loop" in rules
     assert "wait-in-loop" in rules
     assert report.smell_count >= 5
+
+
+# -- duplicate-condition --
+
+def test_duplicate_condition_detected():
+    diag = _diagram(_func("f",
+        IfFlowStep(condition="x > 0", then_steps=(ActionFlowStep(label="a"),), else_steps=()),
+        IfFlowStep(condition="x > 0", then_steps=(ActionFlowStep(label="b"),), else_steps=()),
+    ))
+    smells = detector.detect(diag)
+    dup = [s for s in smells if s.rule == "duplicate-condition"]
+    assert len(dup) == 1
+    assert "x > 0" in dup[0].message
+
+
+def test_different_conditions_not_flagged():
+    diag = _diagram(_func("f",
+        IfFlowStep(condition="x > 0", then_steps=(ActionFlowStep(label="a"),), else_steps=()),
+        IfFlowStep(condition="x > 10", then_steps=(ActionFlowStep(label="b"),), else_steps=()),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "duplicate-condition" not in rules
+
+
+# -- identical-actions --
+
+def test_identical_actions_detected():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="x = x + 1"),
+        ActionFlowStep(label="x = x + 1"),
+    ))
+    smells = detector.detect(diag)
+    dup = [s for s in smells if s.rule == "identical-actions"]
+    assert len(dup) == 1
+
+
+def test_different_actions_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="x = 1"),
+        ActionFlowStep(label="y = 2"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "identical-actions" not in rules
+
+
+# -- nested-loops --
+
+def test_triple_nested_loops():
+    inner = ForInFlowStep(header="k, v in pairs(t)", body_steps=(ActionFlowStep(label="print(v)"),))
+    mid = ForInFlowStep(header="j = 1, 10", body_steps=(inner,))
+    outer = ForInFlowStep(header="i = 1, 10", body_steps=(mid,))
+    diag = _diagram(_func("f", outer))
+    smells = detector.detect(diag)
+    nested = [s for s in smells if s.rule == "nested-loops"]
+    assert len(nested) == 1
+    assert "3 nested" in nested[0].message
+
+
+def test_double_nested_loops_ok():
+    inner = ForInFlowStep(header="j = 1, 10", body_steps=(ActionFlowStep(label="x = 1"),))
+    outer = ForInFlowStep(header="i = 1, 10", body_steps=(inner,))
+    diag = _diagram(_func("f", outer))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "nested-loops" not in rules

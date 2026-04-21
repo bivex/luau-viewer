@@ -37,6 +37,9 @@ class StepTreeSmellDetector(SmellDetector):
             self._check_infinite_loop(function.steps, function.name, smells)
             self._check_empty_then(function.steps, function.name, smells)
             self._check_wait_in_loop(function.steps, False, function.name, smells)
+            self._check_duplicate_condition(function.steps, function.name, smells)
+            self._check_identical_actions(function.steps, function.name, smells)
+            self._check_nested_loops(function.steps, 0, function.name, smells)
         return tuple(smells)
 
     # -- Rule: empty-function --
@@ -246,6 +249,87 @@ class StepTreeSmellDetector(SmellDetector):
                 StepTreeSmellDetector._check_wait_in_loop(step.body_steps, True, function_name, smells)
             elif isinstance(step, ClosureFlowStep):
                 StepTreeSmellDetector._check_wait_in_loop(step.body_steps, inside_loop, function_name, smells)
+
+    # -- Rule: duplicate-condition --
+
+    @staticmethod
+    def _check_duplicate_condition(
+        steps: tuple[ControlFlowStep, ...],
+        function_name: str,
+        smells: list[Smell],
+    ) -> None:
+        prev_if: IfFlowStep | None = None
+        for step in steps:
+            if isinstance(step, IfFlowStep):
+                if prev_if is not None and step.condition.strip() == prev_if.condition.strip():
+                    smells.append(Smell(
+                        rule="duplicate-condition",
+                        severity=SmellSeverity.WARNING,
+                        message=f"Duplicate condition '{step.condition.strip()}' in function '{function_name}' — likely a copy-paste error",
+                        function_name=function_name,
+                    ))
+                prev_if = step
+                StepTreeSmellDetector._check_duplicate_condition(step.then_steps, function_name, smells)
+                StepTreeSmellDetector._check_duplicate_condition(step.else_steps, function_name, smells)
+            else:
+                prev_if = None
+                if isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+                    StepTreeSmellDetector._check_duplicate_condition(step.body_steps, function_name, smells)
+                elif isinstance(step, ClosureFlowStep):
+                    StepTreeSmellDetector._check_duplicate_condition(step.body_steps, function_name, smells)
+
+    # -- Rule: identical-actions --
+
+    @staticmethod
+    def _check_identical_actions(
+        steps: tuple[ControlFlowStep, ...],
+        function_name: str,
+        smells: list[Smell],
+    ) -> None:
+        for i in range(1, len(steps)):
+            if (isinstance(steps[i], ActionFlowStep) and isinstance(steps[i - 1], ActionFlowStep)
+                    and steps[i].label.strip() == steps[i - 1].label.strip()
+                    and steps[i].label.strip()):
+                smells.append(Smell(
+                    rule="identical-actions",
+                    severity=SmellSeverity.WARNING,
+                    message=f"Duplicated action in function '{function_name}': {steps[i].label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        for step in steps:
+            if isinstance(step, IfFlowStep):
+                StepTreeSmellDetector._check_identical_actions(step.then_steps, function_name, smells)
+                StepTreeSmellDetector._check_identical_actions(step.else_steps, function_name, smells)
+            elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+                StepTreeSmellDetector._check_identical_actions(step.body_steps, function_name, smells)
+            elif isinstance(step, ClosureFlowStep):
+                StepTreeSmellDetector._check_identical_actions(step.body_steps, function_name, smells)
+
+    # -- Rule: nested-loops --
+
+    @staticmethod
+    def _check_nested_loops(
+        steps: tuple[ControlFlowStep, ...],
+        depth: int,
+        function_name: str,
+        smells: list[Smell],
+    ) -> None:
+        for step in steps:
+            if isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+                new_depth = depth + 1
+                if new_depth > 2:
+                    smells.append(Smell(
+                        rule="nested-loops",
+                        severity=SmellSeverity.WARNING,
+                        message=f"{new_depth} nested loops in function '{function_name}' — O(n^{new_depth}) complexity, risky in frame-tight code",
+                        function_name=function_name,
+                    ))
+                StepTreeSmellDetector._check_nested_loops(step.body_steps, new_depth, function_name, smells)
+            elif isinstance(step, IfFlowStep):
+                StepTreeSmellDetector._check_nested_loops(step.then_steps, depth, function_name, smells)
+                StepTreeSmellDetector._check_nested_loops(step.else_steps, depth, function_name, smells)
+            elif isinstance(step, ClosureFlowStep):
+                StepTreeSmellDetector._check_nested_loops(step.body_steps, depth, function_name, smells)
 
 
 _DEPRECATED_CALLS = ("spawn(", "delay(", "wait(")

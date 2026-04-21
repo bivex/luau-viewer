@@ -115,13 +115,16 @@ Detected from the control flow step tree — no raw text analysis.
 | Smell | Severity | Trigger |
 |-------|:--------:|---------|
 | `unreachable` | ERROR | Steps after `return`/`break`/`continue` in same sequence |
+| `identical-actions` | WARNING | Same action repeated consecutively — copy-paste error |
+| `duplicate-condition` | WARNING | Same `if` condition twice in a row — copy-paste error |
 | `empty-then` | WARNING | `if` with empty then body |
 | `deep-nesting` | WARNING | if/else nesting exceeds threshold (default: 4) |
+| `nested-loops` | WARNING | > 2 levels of nested loops — O(n^3) complexity |
 | `infinite-loop` | WARNING | `while true` without break/return in body |
-| `empty-function` | INFO | Function with zero steps |
 | `long-function` | WARNING | Function exceeds step threshold (default: 50) |
 | `deprecated-api` | WARNING | `spawn()`, `delay()`, `wait()` instead of `task.*` |
 | `wait-in-loop` | WARNING | Any `wait` inside loop body (performance hit in Roblox) |
+| `empty-function` | INFO | Function with zero steps |
 
 ### CLI flags
 
