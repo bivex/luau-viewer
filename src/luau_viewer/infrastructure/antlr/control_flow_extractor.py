@@ -36,9 +36,8 @@ class _ExtractorContext:
     def text(self, ctx) -> str:
         if ctx is None:
             return ""
-        return self.token_stream.getText(
-            start=ctx.start.tokenIndex,
-            stop=ctx.stop.tokenIndex,
+        return ctx.start.getInputStream().getText(
+            ctx.start.start, ctx.stop.stop
         )
 
     def compact(self, ctx, *, limit: int = 96) -> str:
@@ -187,10 +186,12 @@ def _try_scan_function_slice(
     if body_close_index is None:
         return None, func_index + 1
 
+    body_start_index = _skip_type_annotation(tokens, paren_close + 1, lexer_type)
+
     start_token = tokens[func_index - 1] if is_local else tokens[func_index]
     signature_text = source_text[start_token.start : tokens[paren_close].stop + 1]
     body_text = source_text[
-        tokens[paren_close].stop + 1 : tokens[body_close_index].start
+        tokens[body_start_index].start : tokens[body_close_index].start
     ]
 
     container = _extract_container_from_name(name)
@@ -304,12 +305,52 @@ def _find_matching_end(
             lexer_type.FUNCTION,
         }:
             depth += 1
+        elif token.type == lexer_type.ELSEIF:
+            depth -= 1
         elif token.type == lexer_type.END:
             depth -= 1
             if depth == 0:
                 return index
         index += 1
     return None
+
+
+def _skip_type_annotation(
+    tokens: tuple[object, ...],
+    start_index: int,
+    lexer_type: object,
+) -> int:
+    """Skip past a return type annotation (``: Type``) after ``)``."""
+    if start_index >= len(tokens):
+        return start_index
+    if tokens[start_index].type != lexer_type.COLON:
+        return start_index
+
+    index = start_index + 1
+    depth = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.type in {lexer_type.LPAREN, lexer_type.LBRACE}:
+            depth += 1
+        elif token.type in {lexer_type.RPAREN, lexer_type.RBRACE}:
+            depth -= 1
+        elif depth == 0 and token.type in {
+            lexer_type.DO,
+            lexer_type.THEN,
+            lexer_type.FUNCTION,
+            lexer_type.END,
+            lexer_type.IF,
+            lexer_type.WHILE,
+            lexer_type.FOR,
+            lexer_type.REPEAT,
+            lexer_type.LOCAL,
+            lexer_type.RETURN,
+            lexer_type.ELSE,
+            lexer_type.ELSEIF,
+        }:
+            return index
+        index += 1
+    return start_index
 
 
 def _compact_source_text(text: str) -> str:
@@ -332,6 +373,17 @@ def _extract_lightweight_steps(
     for statement_text, tokens, base_offset in statement_spans:
         if not tokens:
             continue
+
+        if tokens[0].type == lexer_type.DO:
+            # Inline do-block: extract body between DO and matching END
+            end_index = _find_matching_end(tokens, 0, lexer_type)
+            if end_index is not None:
+                inner_text = _slice_token_text(
+                    statement_text, tokens, base_offset, 1, end_index - 1,
+                )
+                inner_steps = _summarize_code_block_steps(inner_text, lexer_type)
+                steps.extend(inner_steps)
+                continue
 
         if tokens[0].type in structured_starters:
             if _should_summarize_structured_statement(statement_text, tokens):
@@ -440,21 +492,37 @@ def _build_summarized_if_step(
     if then_index is None:
         return ActionFlowStep(_compact_label_text(statement_text.strip()))
 
-    depth = 1
-    else_marker_index = None
+    # Collect boundary markers (ELSEIF, ELSE, END) with corrected depth tracking
+    depth = 0
+    prev_was_elseif = False
+    boundaries: list[tuple[int, int]] = []  # (token_index, type)
     end_index = None
+
     for i in range(then_index + 1, len(tokens)):
         token = tokens[i]
-        if token.type in {lexer_type.DO, lexer_type.THEN, lexer_type.FUNCTION}:
-            depth += 1
+        if token.type == lexer_type.ELSEIF:
+            depth -= 1
+            prev_was_elseif = True
+            if depth == 0:
+                boundaries.append((i, token.type))
+        elif token.type in {lexer_type.DO, lexer_type.THEN, lexer_type.FUNCTION}:
+            if token.type == lexer_type.THEN and prev_was_elseif:
+                prev_was_elseif = False
+            else:
+                depth += 1
+                prev_was_elseif = False
         elif token.type == lexer_type.END:
             depth -= 1
-            if depth == 0:
+            prev_was_elseif = False
+            if depth == -1:
                 end_index = i
                 break
-        elif depth == 1 and token.type in {lexer_type.ELSE, lexer_type.ELSEIF}:
-            if else_marker_index is None:
-                else_marker_index = i
+        elif token.type == lexer_type.ELSE:
+            prev_was_elseif = False
+            if depth == 0:
+                boundaries.append((i, token.type))
+        else:
+            prev_was_elseif = False
 
     if end_index is None:
         return ActionFlowStep(_compact_label_text(statement_text.strip()))
@@ -463,42 +531,59 @@ def _build_summarized_if_step(
         _slice_token_text(statement_text, tokens, base_offset, 1, then_index - 1)
     )
 
-    if else_marker_index is not None and tokens[else_marker_index].type == lexer_type.ELSEIF:
-        then_body = _slice_token_text(
-            statement_text, tokens, base_offset, then_index + 1, else_marker_index - 1,
-        )
-        then_steps = _summarize_code_block_steps(then_body, lexer_type) if then_body.strip() else ()
-        nested_text = _slice_token_text(
-            statement_text, tokens, base_offset, else_marker_index, len(tokens) - 1,
-        )
-        else_steps = (
-            _build_summarized_structured_step(
-                nested_text,
-                tokens[else_marker_index:],
-                tokens[else_marker_index].start,
-                lexer_type,
-            ),
-        )
-    elif else_marker_index is not None and tokens[else_marker_index].type == lexer_type.ELSE:
-        then_body = _slice_token_text(
-            statement_text, tokens, base_offset, then_index + 1, else_marker_index - 1,
-        )
-        then_steps = _summarize_code_block_steps(then_body, lexer_type) if then_body.strip() else ()
-        else_body = _slice_token_text(
-            statement_text, tokens, base_offset, else_marker_index + 1, end_index - 1,
-        )
-        else_steps = _summarize_code_block_steps(else_body, lexer_type) if else_body.strip() else ()
-    else:
-        then_body = _slice_token_text(
-            statement_text, tokens, base_offset, then_index + 1, end_index - 1,
-        )
-        then_steps = _summarize_code_block_steps(then_body, lexer_type) if then_body.strip() else ()
-        else_steps = ()
+    # Split into segments between boundaries
+    segments: list[tuple[int, int]] = []  # (start_token_index, end_token_index) inclusive
+    prev_boundary = then_index
+    for boundary_index, _ in boundaries:
+        segments.append((prev_boundary + 1, boundary_index - 1))
+        prev_boundary = boundary_index
+    segments.append((prev_boundary + 1 if boundaries else then_index + 1, end_index - 1))
+
+    # First segment is the then-body
+    then_start, then_end = segments[0]
+    then_body = _slice_token_text(statement_text, tokens, base_offset, then_start, then_end)
+    then_steps = _summarize_code_block_steps(then_body, lexer_type) if then_body.strip() else ()
+
+    # Build elseif chain from inside out
+    inner_else: tuple[ControlFlowStep, ...] = ()
+
+    # Process boundaries in reverse
+    for seg_idx in range(len(segments) - 1, 0, -1):
+        boundary_index, boundary_type = boundaries[seg_idx - 1]
+        seg_start, seg_end = segments[seg_idx]
+        seg_body = _slice_token_text(statement_text, tokens, base_offset, seg_start, seg_end)
+
+        if boundary_type == lexer_type.ELSEIF:
+            elseif_condition = _compact_label_text(
+                _slice_token_text(statement_text, tokens, base_offset, boundary_index + 1, seg_start - 1)
+            )
+            # Find THEN for this elseif to split condition from body
+            elseif_then = None
+            for ti in range(boundary_index + 1, seg_start):
+                if tokens[ti].type == lexer_type.THEN:
+                    elseif_then = ti
+                    break
+            if elseif_then is not None:
+                elseif_condition = _compact_label_text(
+                    _slice_token_text(statement_text, tokens, base_offset, boundary_index + 1, elseif_then - 1)
+                )
+                seg_body = _slice_token_text(statement_text, tokens, base_offset, elseif_then + 1, seg_end)
+
+            elseif_steps = _summarize_code_block_steps(seg_body, lexer_type) if seg_body.strip() else ()
+            inner_else = (
+                IfFlowStep(
+                    condition=elseif_condition or "condition",
+                    then_steps=elseif_steps,
+                    else_steps=inner_else,
+                ),
+            )
+        else:  # ELSE
+            inner_else = _summarize_code_block_steps(seg_body, lexer_type) if seg_body.strip() else ()
 
     return IfFlowStep(
         condition=condition or "condition",
         then_steps=then_steps,
-        else_steps=else_steps,
+        else_steps=inner_else,
     )
 
 
@@ -678,6 +763,7 @@ def _split_top_level_statement_spans(
     depth = 0
     paren_depth = 0
     statement_start_index: int | None = None
+    prev_was_elseif = False
 
     for index in range(0, len(tokens)):
         token = tokens[index]
@@ -688,13 +774,24 @@ def _split_top_level_statement_spans(
             paren_depth += 1
         elif token.type == lexer_type.RPAREN:
             paren_depth = max(paren_depth - 1, 0)
+        elif token.type == lexer_type.ELSEIF:
+            depth -= 1
+            prev_was_elseif = True
         elif token.type in {lexer_type.DO, lexer_type.THEN, lexer_type.FUNCTION, lexer_type.REPEAT}:
-            depth += 1
+            if token.type == lexer_type.THEN and prev_was_elseif:
+                prev_was_elseif = False
+            else:
+                depth += 1
+                prev_was_elseif = False
         elif token.type == lexer_type.END:
             depth -= 1
+            prev_was_elseif = False
         elif token.type == lexer_type.UNTIL:
             if depth > 0:
                 depth -= 1
+            prev_was_elseif = False
+        else:
+            prev_was_elseif = False
 
         next_token = tokens[index + 1] if index + 1 < len(tokens) else None
         at_statement_end = False
@@ -802,6 +899,10 @@ def _build_control_flow_visitor(visitor_base: type, context: _ExtractorContext) 
             for stat_ctx in block_ctx.stat():
                 if stat_ctx is None:
                     continue
+                if stat_ctx.doStat() is not None:
+                    inner = self._extract_block(stat_ctx.doStat().block())
+                    steps.extend(inner)
+                    continue
                 extracted = self._extract_stat(stat_ctx)
                 if extracted is not None:
                     steps.append(extracted)
@@ -853,43 +954,28 @@ def _build_control_flow_visitor(visitor_base: type, context: _ExtractorContext) 
             condition = context.compact(if_ctx.exp())
             then_steps = self._extract_block(if_ctx.block())
 
-            else_steps: tuple[ControlFlowStep, ...] = ()
             elseif_clauses = if_ctx.elseifClause()
             else_clause = if_ctx.elseClause()
 
-            if elseif_clauses:
-                for i, elseif_ctx in enumerate(elseif_clauses):
-                    elseif_condition = context.compact(elseif_ctx.exp())
-                    elseif_steps = self._extract_block(elseif_ctx.block())
-                    chained = IfFlowStep(
-                        condition=elseif_condition,
-                        then_steps=elseif_steps,
-                        else_steps=(),
-                    )
-                    if i == 0 and not else_clause:
-                        else_steps = (chained,)
-                    else:
-                        pass
+            # Build elseif chain from inside out
+            inner_else: tuple[ControlFlowStep, ...] = ()
+            if else_clause is not None:
+                inner_else = self._extract_block(else_clause.block())
 
-                if else_clause is not None:
-                    else_block = else_clause.block()
-                    inner_else = self._extract_block(else_block)
-                    else_steps = (inner_else,) if inner_else else ()
-                elif elseif_clauses:
-                    last_elseif = elseif_clauses[-1]
-                    inner = IfFlowStep(
-                        condition=context.compact(last_elseif.exp()),
-                        then_steps=self._extract_block(last_elseif.block()),
-                        else_steps=(),
+            if elseif_clauses:
+                for elseif_ctx in reversed(elseif_clauses):
+                    inner_else = (
+                        IfFlowStep(
+                            condition=context.compact(elseif_ctx.exp()),
+                            then_steps=self._extract_block(elseif_ctx.block()),
+                            else_steps=inner_else,
+                        ),
                     )
-                    else_steps = (inner,)
-            elif else_clause is not None:
-                else_steps = self._extract_block(else_clause.block())
 
             return IfFlowStep(
                 condition=condition,
                 then_steps=then_steps,
-                else_steps=else_steps,
+                else_steps=inner_else,
             )
 
         def _extract_while_stat(self, while_ctx) -> WhileFlowStep:

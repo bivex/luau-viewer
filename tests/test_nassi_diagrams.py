@@ -58,7 +58,7 @@ def test_nassi_service_builds_html_document() -> None:
     assert document.function_count == 2
     assert "MathBox.score" in document.function_names
     assert "MathBox.normalize" in document.function_names
-    assert "While total&gt;100" in document.html
+    assert "While total &gt; 100" in document.html
     assert "Repeat" in document.html
     assert "Luau Viewer" in document.html
 
@@ -551,3 +551,252 @@ class TestIfDepthRendering:
                 ),
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# P0 bug regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestBug1ReturnTypeAnnotation:
+    """BUG-1: Return type annotations must not leak as spurious action steps."""
+
+    def test_simple_return_type_does_not_produce_spurious_step(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("typed-fn"),
+            location="typed.luau",
+            content="function lerp(a, b, t): any\n    return a + ((b - a) * t)\nend",
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        steps = diagram.functions[0].steps
+        first_label = steps[0].label if steps else ""
+        assert not first_label.startswith(":"), f"Spurious type annotation leaked: {first_label}"
+        assert first_label == "return a + ((b - a) * t)"
+
+    def test_optional_return_type(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("opt-type"),
+            location="opt.luau",
+            content="function find(name: string): Instance?\n    return nil\nend",
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        steps = diagram.functions[0].steps
+        assert len(steps) == 1
+        assert steps[0].label == "return nil"
+
+    def test_functional_return_type(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("fn-type"),
+            location="fn-type.luau",
+            content="function combine(a, b): (number, number)\n    return a, b\nend",
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        steps = diagram.functions[0].steps
+        assert len(steps) == 1
+        assert steps[0].label == "return a, b"
+
+
+class TestBug2ElseifChains:
+    """BUG-2: Elseif chains must produce properly nested IfFlowStep objects."""
+
+    def test_elseif_chain_preserves_all_branches(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("elseif-chain"),
+            location="elseif.luau",
+            content=(
+                "function classify(x)\n"
+                "    if x > 0 then\n"
+                "        return 1\n"
+                "    elseif x < 0 then\n"
+                "        return -1\n"
+                "    else\n"
+                "        return 0\n"
+                "    end\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        steps = diagram.functions[0].steps
+        assert len(steps) == 1
+        root_if = steps[0]
+        assert isinstance(root_if, IfFlowStep)
+        assert root_if.condition == "x > 0"
+        assert len(root_if.then_steps) == 1
+
+        # Elseif should be nested as else_steps
+        assert len(root_if.else_steps) == 1
+        elseif_if = root_if.else_steps[0]
+        assert isinstance(elseif_if, IfFlowStep)
+        assert elseif_if.condition == "x < 0"
+        assert len(elseif_if.then_steps) == 1
+
+        # Final else should be nested in the elseif's else_steps
+        assert len(elseif_if.else_steps) == 1
+        assert isinstance(elseif_if.else_steps[0], ActionFlowStep)
+        assert elseif_if.else_steps[0].label == "return 0"
+
+    def test_triple_elseif_chain(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("triple-elseif"),
+            location="triple.luau",
+            content=(
+                "function grade(score)\n"
+                "    if score >= 90 then\n"
+                "        return 'A'\n"
+                "    elseif score >= 80 then\n"
+                "        return 'B'\n"
+                "    elseif score >= 70 then\n"
+                "        return 'C'\n"
+                "    else\n"
+                "        return 'F'\n"
+                "    end\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        root_if = diagram.functions[0].steps[0]
+        assert isinstance(root_if, IfFlowStep)
+
+        # First elseif
+        assert len(root_if.else_steps) == 1
+        first_elseif = root_if.else_steps[0]
+        assert isinstance(first_elseif, IfFlowStep)
+        assert first_elseif.condition == "score >= 80"
+
+        # Second elseif
+        assert len(first_elseif.else_steps) == 1
+        second_elseif = first_elseif.else_steps[0]
+        assert isinstance(second_elseif, IfFlowStep)
+        assert second_elseif.condition == "score >= 70"
+
+        # Final else
+        assert len(second_elseif.else_steps) == 1
+        assert second_elseif.else_steps[0].label == "return 'F'"
+
+    def test_elseif_without_else(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("elseif-no-else"),
+            location="noelse.luau",
+            content=(
+                "function check(x)\n"
+                "    if x > 10 then\n"
+                "        return 'big'\n"
+                "    elseif x > 5 then\n"
+                "        return 'medium'\n"
+                "    end\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        root_if = diagram.functions[0].steps[0]
+        assert isinstance(root_if, IfFlowStep)
+        assert len(root_if.else_steps) == 1
+        elseif = root_if.else_steps[0]
+        assert isinstance(elseif, IfFlowStep)
+        assert elseif.condition == "x > 5"
+        assert elseif.else_steps == ()
+
+
+class TestBug3DoBlocks:
+    """BUG-3: do...end blocks with multiple statements must not be dropped."""
+
+    def test_do_block_with_multiple_statements(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("do-block"),
+            location="do.luau",
+            content=(
+                "function process()\n"
+                "    do\n"
+                "        local x = 1\n"
+                "        local y = 2\n"
+                "    end\n"
+                "    return x + y\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        steps = diagram.functions[0].steps
+        # Should have 3 steps: local x = 1, local y = 2, return x + y
+        assert len(steps) == 3
+        assert steps[0].label == "local x = 1"
+        assert steps[1].label == "local y = 2"
+        assert steps[2].label == "return x + y"
+
+
+class TestBug4Whitespace:
+    """BUG-4: Labels must preserve spaces around operators and after keywords."""
+
+    def test_spaces_around_operators(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("ws"),
+            location="ws.luau",
+            content="function lerp(a, b, t): any\n    return a + ((b - a) * t)\nend",
+        )
+        diagram = extractor.extract(source)
+        steps = diagram.functions[0].steps
+        assert steps[0].label == "return a + ((b - a) * t)"
+
+    def test_spaces_after_keywords(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("kw"),
+            location="kw.luau",
+            content=(
+                "function compute(x)\n"
+                "    local result = x * 2\n"
+                "    return result\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        labels = [s.label for s in diagram.functions[0].steps]
+        assert "local result = x * 2" in labels
+        assert "return result" in labels
+
+
+class TestFeat1ColonMethodSyntax:
+    """FEAT-1: Colon method syntax extracts container and qualified name."""
+
+    def test_colon_method_container(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("colon-method"),
+            location="colon.luau",
+            content=(
+                "local Class = {}\n"
+                "function Class:process(input)\n"
+                "    return input\n"
+                "end\n"
+                "return Class"
+            ),
+        )
+        diagram = extractor.extract(source)
+        assert len(diagram.functions) == 1
+        func = diagram.functions[0]
+        assert func.container == "Class"
+        assert "Class" in func.signature
