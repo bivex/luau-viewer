@@ -8,11 +8,13 @@ import sys
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
+from typing import Any
 
 from luau_viewer.application.control_flow import (
     BuildNassiDiagramCommand,
     BuildNassiDirectoryCommand,
     NassiDiagramBundleDTO,
+    NassiDiagramDocumentDTO,
     NassiDiagramService,
 )
 from luau_viewer.application.dto import ParseDirectoryCommand, ParseFileCommand, ParsingJobReportDTO
@@ -40,7 +42,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "parse-file":
             report = _build_parse_service().parse_file(ParseFileCommand(path=args.path))
         elif args.command == "parse-dir":
-            report = _build_parse_service().parse_directory(ParseDirectoryCommand(root_path=args.path))
+            report = _build_parse_service().parse_directory(
+                ParseDirectoryCommand(root_path=args.path)
+            )
         elif args.command == "nassi-file":
             document = _build_nassi_service().build_file_diagram(
                 BuildNassiDiagramCommand(path=args.path)
@@ -54,11 +58,17 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, indent=2))
             return 0
         elif args.command == "nassi-dir":
-            bundle = _build_nassi_service().build_directory_diagrams(
+            renderer = HtmlNassiDiagramRenderer(use_shared_css=True, css_path="nsd.css")
+            service = NassiDiagramService(
+                source_repository=FileSystemSourceRepository(),
+                extractor=AntlrLuauControlFlowExtractor(),
+                renderer=renderer,
+            )
+            bundle = service.build_directory_diagrams(
                 BuildNassiDirectoryCommand(root_path=args.path)
             )
             output_dir = _resolve_output_directory(args.path, args.out)
-            written_diagrams = _write_directory_diagrams(bundle, output_dir)
+            written_diagrams = _write_directory_diagrams(bundle, output_dir, renderer)
             index_path = output_dir / "index.html"
             index_path.write_text(
                 _render_directory_index(bundle.root_path, written_diagrams),
@@ -176,9 +186,15 @@ class _WrittenNassiDiagram:
 def _write_directory_diagrams(
     bundle: NassiDiagramBundleDTO,
     output_dir: Path,
+    renderer: Any,
 ) -> tuple[_WrittenNassiDiagram, ...]:
     root_path = Path(bundle.root_path)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write shared CSS file
+    css_content = renderer._inline_css()
+    css_file = output_dir / "nsd.css"
+    css_file.write_text(css_content, encoding="utf-8")
 
     written_diagrams: list[_WrittenNassiDiagram] = []
     for document in bundle.documents:
@@ -186,7 +202,23 @@ def _write_directory_diagrams(
         relative_source_path = source_path.relative_to(root_path)
         output_path = (output_dir / relative_source_path).with_suffix(".nassi.html")
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(document.html, encoding="utf-8")
+
+        # Compute correct relative CSS path
+        rel_dir = output_path.parent.relative_to(output_dir)
+        # Handle case where file is directly under output_dir (rel_dir == '.')
+        if rel_dir == Path("."):
+            depth = 0
+        else:
+            depth = len(rel_dir.parts)
+        if depth == 0:
+            rel_css = "nsd.css"
+        else:
+            rel_css = "/".join([".."] * depth) + "/nsd.css"
+
+        # Replace placeholder
+        html = document.html.replace('href="nsd.css"', f'href="{rel_css}"')
+
+        output_path.write_text(html, encoding="utf-8")
         written_diagrams.append(
             _WrittenNassiDiagram(
                 source_location=document.source_location,
