@@ -110,11 +110,13 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
         enable_syntax_highlight: bool = True,
         use_shared_css: bool = False,
         css_path: str = "nsd.css",
+        index_href: str = "index.html",
         max_depth_for_css: int = 50,
     ):
         self.enable_syntax_highlight = enable_syntax_highlight
         self.use_shared_css = use_shared_css
         self.css_path = css_path
+        self._index_href = lambda: index_href
         self.max_depth_for_css = max_depth_for_css
 
     def _depth_badge(self, i: int) -> str:
@@ -341,6 +343,14 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
         color: var(--muted);
         overflow-wrap: anywhere;
       }}
+      .toolbar-back {{
+        margin-left: auto;
+        font-size: 12px;
+        color: var(--blue);
+        text-decoration: none;
+        white-space: nowrap;
+      }}
+      .toolbar-back:hover {{ color: var(--text-bright); text-decoration: underline; }}
       .viewer-body {{
         padding: 16px;
         background:
@@ -711,8 +721,9 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
         <span class="titlebar-text">Luau Viewer · NSD Viewer</span>
       </div>
       <div class="toolbar">
-        <span class="toolbar-label">Nassi-Shneiderman</span>
+        <span class="toolbar-label">Nassi-Schneiderman</span>
         <code class="toolbar-path">{escape(diagram.source_location)}</code>
+        {'<a class="toolbar-back" href="' + self._index_href() + '">&#8592; Back to Index</a>' if self.use_shared_css else ''}
       </div>
       <div class="viewer-body{" " + ("with-toc" if toc else "")}">
         {toc}

@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(payload, indent=2))
             return 0
         elif args.command == "nassi-dir":
-            renderer = HtmlNassiDiagramRenderer(use_shared_css=True, css_path="nsd.css")
+            renderer = HtmlNassiDiagramRenderer(use_shared_css=True, css_path="nsd.css", index_href="index.html")
             service = NassiDiagramService(
                 source_repository=FileSystemSourceRepository(),
                 extractor=AntlrLuauControlFlowExtractor(),
@@ -212,11 +212,15 @@ def _write_directory_diagrams(
             depth = len(rel_dir.parts)
         if depth == 0:
             rel_css = "nsd.css"
+            rel_index = "index.html"
         else:
-            rel_css = "/".join([".."] * depth) + "/nsd.css"
+            prefix = "/".join([".."] * depth)
+            rel_css = f"{prefix}/nsd.css"
+            rel_index = f"{prefix}/index.html"
 
-        # Replace placeholder
+        # Replace placeholders
         html = document.html.replace('href="nsd.css"', f'href="{rel_css}"')
+        html = html.replace('href="index.html"', f'href="{rel_index}"')
 
         output_path.write_text(html, encoding="utf-8")
         written_diagrams.append(
