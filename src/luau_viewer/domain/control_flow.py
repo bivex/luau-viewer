@@ -47,6 +47,13 @@ class RepeatUntilFlowStep(ControlFlowStep):
 
 
 @dataclass(frozen=True, slots=True)
+class ClosureFlowStep(ControlFlowStep):
+    call_label: str
+    signature: str
+    body_steps: tuple[ControlFlowStep, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class FunctionControlFlow:
     name: str
     signature: str

@@ -10,6 +10,7 @@ from antlr4.Token import Token
 
 from luau_viewer.domain.control_flow import (
     ActionFlowStep,
+    ClosureFlowStep,
     ControlFlowDiagram,
     ControlFlowStep,
     ForInFlowStep,
@@ -357,6 +358,78 @@ def _compact_source_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_MIN_CLOSURE_BODY_CHARS = 60
+
+
+def _extract_closure_from_action(
+    statement_text: str,
+    tokens: tuple[object, ...],
+    base_offset: int,
+    lexer_type: object,
+    label: str,
+) -> ClosureFlowStep | None:
+    """Detect anonymous function in an action span and decompose if non-trivial."""
+    # Find FUNCTION token not at position 0 (not a function statement)
+    func_index = None
+    for i in range(1, len(tokens)):
+        if tokens[i].type == lexer_type.FUNCTION:
+            func_index = i
+            break
+
+    if func_index is None:
+        return None
+
+    # Find the opening paren of the anonymous function's parameter list
+    paren_open = None
+    for i in range(func_index + 1, len(tokens)):
+        if tokens[i].type == lexer_type.LPAREN:
+            paren_open = i
+            break
+        if tokens[i].type in {lexer_type.DO, lexer_type.THEN, lexer_type.END}:
+            return None
+
+    if paren_open is None:
+        return None
+
+    paren_close = _find_matching_paren(tokens, paren_open, lexer_type)
+    if paren_close is None:
+        return None
+
+    # Find matching END for the anonymous function body
+    end_index = _find_matching_end(tokens, paren_close, lexer_type)
+    if end_index is None:
+        return None
+
+    # Extract the anonymous function's body
+    body_text = _slice_token_text(
+        statement_text, tokens, base_offset, paren_close + 1, end_index - 1,
+    )
+    if not body_text.strip() or len(body_text.strip()) < _MIN_CLOSURE_BODY_CHARS:
+        return None
+
+    # Extract signature
+    sig_text = _slice_token_text(
+        statement_text, tokens, base_offset, func_index, paren_close,
+    )
+    signature = _compact_source_text(sig_text)
+
+    # Build abbreviated call label: replace closure body with {...}
+    pre_text = _slice_token_text(
+        statement_text, tokens, base_offset, 0, func_index - 1,
+    ).rstrip()
+    call_label = _compact_source_text(f"{pre_text} {{...}}")
+
+    body_steps = _summarize_code_block_steps(body_text, lexer_type)
+    if not body_steps:
+        return None
+
+    return ClosureFlowStep(
+        call_label=call_label,
+        signature=signature,
+        body_steps=body_steps,
+    )
+
+
 def _extract_lightweight_steps(
     body_text: str,
     generated: object,
@@ -409,7 +482,14 @@ def _extract_lightweight_steps(
                 steps.append(ActionFlowStep(_compact_source_text(statement_text.strip())))
             continue
 
-        steps.append(ActionFlowStep(_compact_source_text(statement_text.strip().removesuffix(";"))))
+        label = _compact_source_text(statement_text.strip().removesuffix(";"))
+        closure = _extract_closure_from_action(
+            statement_text, tokens, base_offset, lexer_type, label,
+        )
+        if closure is not None:
+            steps.append(closure)
+        else:
+            steps.append(ActionFlowStep(label))
 
     return tuple(steps)
 

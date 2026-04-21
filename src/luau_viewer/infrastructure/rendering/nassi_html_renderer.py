@@ -8,6 +8,7 @@ import re
 
 from luau_viewer.domain.control_flow import (
     ActionFlowStep,
+    ClosureFlowStep,
     ControlFlowDiagram,
     ControlFlowStep,
     ForInFlowStep,
@@ -284,6 +285,16 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
       /* ── Block type colours ── */
       .ns-loop,
       .ns-repeat  {{ background: var(--loop-fill); }}
+      .ns-closure {{ background: var(--purple-dim); border-left: 3px solid var(--purple); }}
+      .ns-closure .ns-header {{ background: rgba(196, 167, 255, 0.12); }}
+      .ns-closure-signature {{
+        padding: 5px 12px;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--purple);
+        background: rgba(196, 167, 255, 0.06);
+        border-bottom: 1px solid var(--border);
+      }}
 
       /* Left accent stripes */
       .ns-node.ns-loop,
@@ -532,6 +543,14 @@ class HtmlNassiDiagramRenderer(NassiDiagramRenderer):
                 f"{self._render_header('Repeat')}"
                 f"{self._render_sequence(step.body_steps, depth=depth + 1)}"
                 f"{self._render_footer(f'Until {step.condition}')}"
+                "</div>"
+            )
+        if isinstance(step, ClosureFlowStep):
+            return (
+                '<div class="ns-node ns-closure">'
+                f"{self._render_header(escape(step.call_label))}"
+                f'<div class="ns-closure-signature">{escape(step.signature)}</div>'
+                f"{self._render_sequence(step.body_steps, depth=depth + 1)}"
                 "</div>"
             )
         raise TypeError(f"unsupported step type: {type(step)!r}")

@@ -11,6 +11,7 @@ from luau_viewer.application.control_flow import (
 )
 from luau_viewer.domain.control_flow import (
     ActionFlowStep,
+    ClosureFlowStep,
     ControlFlowDiagram,
     FunctionControlFlow,
     IfFlowStep,
@@ -800,3 +801,98 @@ class TestFeat1ColonMethodSyntax:
         func = diagram.functions[0]
         assert func.container == "Class"
         assert "Class" in func.signature
+
+
+class TestFeat3AnonymousFunctions:
+    """FEAT-3: Anonymous functions decompose into ClosureFlowStep when non-trivial."""
+
+    def test_pcall_with_multi_statement_closure(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("pcall-closure"),
+            location="pcall.luau",
+            content=(
+                "function process(data)\n"
+                "    local ok, result = pcall(function()\n"
+                "        local x = compute(data)\n"
+                "        local y = transform(x)\n"
+                "        return y\n"
+                "    end)\n"
+                "    return result\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        steps = diagram.functions[0].steps
+        assert len(steps) == 2
+        closure = steps[0]
+        assert isinstance(closure, ClosureFlowStep)
+        assert "pcall" in closure.call_label
+        assert len(closure.body_steps) == 3
+
+    def test_simple_closure_stays_as_action(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("simple-closure"),
+            location="simple.luau",
+            content=(
+                "function process(items)\n"
+                "    table.sort(items, function(a, b)\n"
+                "        return a.value < b.value\n"
+                "    end)\n"
+                "    return items\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        steps = diagram.functions[0].steps
+        # Simple one-liner closure stays as plain action step
+        assert len(steps) == 2
+        assert isinstance(steps[0], ActionFlowStep)
+        assert "table.sort" in steps[0].label
+
+    def test_event_connect_with_closure(self) -> None:
+        _ensure_generated_parser()
+        extractor = AntlrLuauControlFlowExtractor()
+        source = SourceUnit(
+            identifier=SourceUnitId("event-closure"),
+            location="event.luau",
+            content=(
+                "function setup()\n"
+                "    local conn\n"
+                "    conn = event:Connect(function()\n"
+                "        local data = fetch()\n"
+                "        process(data)\n"
+                "        conn:Disconnect()\n"
+                "    end)\n"
+                "    return conn\n"
+                "end"
+            ),
+        )
+        diagram = extractor.extract(source)
+        steps = diagram.functions[0].steps
+        # local conn (action), closure, return conn
+        assert len(steps) == 3
+        closure = steps[1]
+        assert isinstance(closure, ClosureFlowStep)
+        assert len(closure.body_steps) == 3
+
+    def test_closure_renders_in_html(self) -> None:
+        renderer = HtmlNassiDiagramRenderer()
+        html = renderer._render_step(
+            ClosureFlowStep(
+                call_label="pcall({...})",
+                signature="function()",
+                body_steps=(
+                    ActionFlowStep("local x = 1"),
+                    ActionFlowStep("return x"),
+                ),
+            ),
+            depth=0,
+        )
+        assert "ns-closure" in html
+        assert "pcall" in html
+        assert "function()" in html
+        assert "local x = 1" in html
