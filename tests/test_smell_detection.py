@@ -291,7 +291,7 @@ def test_smells_fixture():
     assert "magic-numbers" in rules
     assert "global-variable" in rules
     assert "connect-leak" in rules
-    assert report.smell_count >= 8
+    assert report.smell_count >= 10
 
 
 # -- duplicate-condition --
@@ -765,3 +765,273 @@ def test_no_connect_not_flagged():
     smells = detector.detect(diag)
     rules = [s.rule for s in smells]
     assert "connect-leak" not in rules
+
+
+# -- yield-in-critical --
+
+def test_yield_in_remote_handler():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="Remote.OnServerEvent:Connect(function(player)",
+            signature="function(player)",
+            body_steps=(ActionFlowStep(label="task.wait(2)"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    yc = [s for s in smells if s.rule == "yield-in-critical"]
+    assert len(yc) == 1
+    assert yc[0].severity == SmellSeverity.ERROR
+
+
+def test_yield_in_bindable_handler():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="BindableEvent.Event:Connect(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="wait(0.5)"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "yield-in-critical" in rules
+
+
+def test_yield_outside_handler_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="task.wait(1)"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "yield-in-critical" not in rules
+
+
+# -- pcall-ignored-result --
+
+def test_pcall_ignored():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="pcall(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="DataStore:SetAsync(key, {})"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    pi = [s for s in smells if s.rule == "pcall-ignored-result"]
+    assert len(pi) == 1
+    assert pi[0].severity == SmellSeverity.WARNING
+
+
+def test_pcall_captured_not_flagged():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="local ok, result = pcall(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="DataStore:GetAsync(key)"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "pcall-ignored-result" not in rules
+
+
+def test_xpcall_ignored():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="xpcall(risky, errorHandler)"),
+    ))
+    smells = detector.detect(diag)
+    pi = [s for s in smells if s.rule == "pcall-ignored-result"]
+    assert len(pi) == 1
+
+
+def test_no_pcall_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="print('safe')"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "pcall-ignored-result" not in rules
+
+
+# -- infinite-yield-risk --
+
+def test_waitforchild_no_timeout():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label='local obj = ReplicatedStorage:WaitForChild("DamageEvent")'),
+    ))
+    smells = detector.detect(diag)
+    iy = [s for s in smells if s.rule == "infinite-yield-risk"]
+    assert len(iy) == 1
+    assert iy[0].severity == SmellSeverity.WARNING
+
+
+def test_waitforchild_with_timeout_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label='local obj = ReplicatedStorage:WaitForChild("DamageEvent", 5)'),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "infinite-yield-risk" not in rules
+
+
+def test_waitforchild_single_quotes():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local obj = parent:WaitForChild('Part')"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "infinite-yield-risk" in rules
+
+
+# -- remote-spam --
+
+def test_fire_in_loop():
+    diag = _diagram(_func("f",
+        ForInFlowStep(header="i = 1, 10", body_steps=(
+            ActionFlowStep(label="Remote:FireServer(data)"),
+        )),
+    ))
+    smells = detector.detect(diag)
+    rs = [s for s in smells if s.rule == "remote-spam"]
+    assert len(rs) == 1
+    assert rs[0].severity == SmellSeverity.WARNING
+
+
+def test_fire_in_heartbeat():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="RunService.Heartbeat:Connect(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="Remote:FireServer(position)"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    rs = [s for s in smells if s.rule == "remote-spam"]
+    assert len(rs) == 1
+    assert "throttle" in rs[0].message
+
+
+def test_fire_outside_loop_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="Remote:FireServer(data)"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "remote-spam" not in rules
+
+
+# -- task-spawn-storm --
+
+def test_task_spawn_in_loop():
+    diag = _diagram(_func("f",
+        ForInFlowStep(header="i = 1, 100", body_steps=(
+            ActionFlowStep(label="task.spawn(doWork)"),
+        )),
+    ))
+    smells = detector.detect(diag)
+    ts = [s for s in smells if s.rule == "task-spawn-storm"]
+    assert len(ts) == 1
+    assert ts[0].severity == SmellSeverity.WARNING
+
+
+def test_coroutine_wrap_in_loop():
+    diag = _diagram(_func("f",
+        WhileFlowStep(condition="running", body_steps=(
+            ActionFlowStep(label="coroutine.wrap(handler)()"),
+        )),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "task-spawn-storm" in rules
+
+
+def test_spawn_outside_loop_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="task.spawn(processData)"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "task-spawn-storm" not in rules
+
+
+# -- require-in-loop --
+
+def test_require_in_loop():
+    diag = _diagram(_func("f",
+        ForInFlowStep(header="_, v in pairs(modules)", body_steps=(
+            ActionFlowStep(label="local m = require(v)"),
+        )),
+    ))
+    smells = detector.detect(diag)
+    ri = [s for s in smells if s.rule == "require-in-loop"]
+    assert len(ri) == 1
+    assert ri[0].severity == SmellSeverity.WARNING
+
+
+def test_require_outside_loop_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local Utils = require(Modules.Utils)"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "require-in-loop" not in rules
+
+
+# -- event-reconnect-loop --
+
+def test_connect_in_loop():
+    diag = _diagram(_func("f",
+        ForInFlowStep(header="_, part in pairs(parts)", body_steps=(
+            ClosureFlowStep(
+                call_label="part.Touched:Connect(function(hit)",
+                signature="function(hit)",
+                body_steps=(ActionFlowStep(label="processHit(hit)"),),
+            ),
+        )),
+    ))
+    smells = detector.detect(diag)
+    er = [s for s in smells if s.rule == "event-reconnect-loop"]
+    assert len(er) == 1
+    assert er[0].severity == SmellSeverity.WARNING
+
+
+def test_connect_outside_loop_not_flagged():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="event:Connect(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="handle()"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "event-reconnect-loop" not in rules
+
+
+# -- unsafe-tonumber --
+
+def test_unsafe_tonumber():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local n = tonumber(value)"),
+    ))
+    smells = detector.detect(diag)
+    ut = [s for s in smells if s.rule == "unsafe-tonumber"]
+    assert len(ut) == 1
+    assert ut[0].severity == SmellSeverity.INFO
+
+
+def test_tonumber_with_fallback_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local n = tonumber(value) or 0"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "unsafe-tonumber" not in rules
+
+
+def test_no_tonumber_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local n = value + 1"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "unsafe-tonumber" not in rules

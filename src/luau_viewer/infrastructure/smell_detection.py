@@ -52,6 +52,14 @@ class StepTreeSmellDetector(SmellDetector):
             _check_getchildren_in_loop(function.steps, False, function.name, smells)
             _check_unprotected_remote(function.steps, function.name, smells)
             _check_connect_leak(function, smells)
+            _check_yield_in_critical(function.steps, function.name, smells)
+            _check_pcall_ignored(function.steps, function.name, smells)
+            _check_infinite_yield_risk(function.steps, function.name, smells)
+            _check_remote_spam(function.steps, False, function.name, smells)
+            _check_task_spawn_storm(function.steps, False, function.name, smells)
+            _check_require_in_loop(function.steps, False, function.name, smells)
+            _check_event_reconnect_loop(function.steps, False, function.name, smells)
+            _check_unsafe_tonumber(function.steps, function.name, smells)
         return tuple(smells)
 
     # -- Rule: empty-function --
@@ -353,6 +361,15 @@ _GLOBAL_RE = re.compile(r'_G\s*[\.\[]')
 _GETCHILDREN_RE = re.compile(r':Get(?:Children|Descendants)\(\)')
 _REMOTE_CALL_RE = re.compile(r':(?:Fire|Invoke)Server\(')
 _CLEANUP_MARKERS = ('Maid', 'Janitor', 'Trove', ':Disconnect()')
+_CRITICAL_HANDLER_RE = re.compile(r'On(?:Server|Client)(?:Event|Invoke)|BindableEvent')
+_YIELD_IN_HANDLER_RE = re.compile(r'(?:task\.)?wait\s*\(')
+_WAITFORCHILD_NO_TIMEOUT_RE = re.compile(r':WaitForChild\(\s*["\'][^"\']*["\']\s*\)')
+_REMOTE_SEND_RE = re.compile(r':(?:FireServer|FireAllClients|FireClient)\s*\(')
+_FRAME_SIGNAL_RE = re.compile(r'(?:Heartbeat|RenderStepped|Stepped)\s*:Connect\(')
+_SPAWN_STORM_RE = re.compile(r'task\.spawn\s*\(|coroutine\.wrap\s*\(')
+_PCALL_CALL_RE = re.compile(r'(?<!\w)(?:pcall|xpcall)\s*\(')
+_TONUMBER_RE = re.compile(r'(?<!\w)tonumber\s*\([^)]+\)')
+_TONUMBER_SAFE_RE = re.compile(r'(?<!\w)tonumber\s*\([^)]+\)\s+or\s+')
 
 
 def _check_self_assignment(
@@ -696,6 +713,287 @@ def _collect_all_labels(steps: tuple[ControlFlowStep, ...]) -> list[str]:
             labels.append(step.call_label)
             labels.extend(_collect_all_labels(step.body_steps))
     return labels
+
+
+# -- Rule: yield-in-critical --
+
+def _check_yield_in_critical(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ClosureFlowStep):
+            if _CRITICAL_HANDLER_RE.search(step.call_label):
+                _find_yields_in_body(step.body_steps, function_name, smells)
+            _check_yield_in_critical(step.body_steps, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_yield_in_critical(step.then_steps, function_name, smells)
+            _check_yield_in_critical(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_yield_in_critical(step.body_steps, function_name, smells)
+
+
+def _find_yields_in_body(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            if _YIELD_IN_HANDLER_RE.search(step.label):
+                smells.append(Smell(
+                    rule="yield-in-critical",
+                    severity=SmellSeverity.ERROR,
+                    message=f"Yield inside critical handler in function '{function_name}': "
+                            f"blocks the thread and creates race conditions — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _find_yields_in_body(step.then_steps, function_name, smells)
+            _find_yields_in_body(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _find_yields_in_body(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _find_yields_in_body(step.body_steps, function_name, smells)
+
+
+# -- Rule: pcall-ignored-result --
+
+def _check_pcall_ignored(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            if _is_pcall_result_ignored(step.label):
+                smells.append(Smell(
+                    rule="pcall-ignored-result",
+                    severity=SmellSeverity.WARNING,
+                    message=f"pcall/xpcall result ignored in function '{function_name}': "
+                            f"errors silently swallowed — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, ClosureFlowStep):
+            if _is_pcall_result_ignored(step.call_label):
+                smells.append(Smell(
+                    rule="pcall-ignored-result",
+                    severity=SmellSeverity.WARNING,
+                    message=f"pcall/xpcall result ignored in function '{function_name}': "
+                            f"errors silently swallowed — {step.call_label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+            _check_pcall_ignored(step.body_steps, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_pcall_ignored(step.then_steps, function_name, smells)
+            _check_pcall_ignored(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_pcall_ignored(step.body_steps, function_name, smells)
+
+
+def _is_pcall_result_ignored(text: str) -> bool:
+    text = text.strip()
+    if not _PCALL_CALL_RE.search(text):
+        return False
+    pcall_pos = text.find("pcall(")
+    if pcall_pos < 0:
+        pcall_pos = text.find("xpcall(")
+    return "=" not in text[:pcall_pos]
+
+
+# -- Rule: infinite-yield-risk --
+
+def _check_infinite_yield_risk(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            if _WAITFORCHILD_NO_TIMEOUT_RE.search(step.label):
+                smells.append(Smell(
+                    rule="infinite-yield-risk",
+                    severity=SmellSeverity.WARNING,
+                    message=f":WaitForChild() without timeout in function '{function_name}': "
+                            f"can hang forever — add a timeout parameter — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _check_infinite_yield_risk(step.then_steps, function_name, smells)
+            _check_infinite_yield_risk(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_infinite_yield_risk(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_infinite_yield_risk(step.body_steps, function_name, smells)
+
+
+# -- Rule: remote-spam --
+
+def _check_remote_spam(
+    steps: tuple[ControlFlowStep, ...],
+    inside_loop: bool,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep) and inside_loop:
+            if _REMOTE_SEND_RE.search(step.label):
+                smells.append(Smell(
+                    rule="remote-spam",
+                    severity=SmellSeverity.WARNING,
+                    message=f"Remote :Fire*() inside loop in function '{function_name}': "
+                            f"rate-limited by Roblox, add debounce — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, ClosureFlowStep):
+            if _FRAME_SIGNAL_RE.search(step.call_label):
+                _find_remote_sends_in_body(step.body_steps, function_name, smells)
+            _check_remote_spam(step.body_steps, inside_loop, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_remote_spam(step.body_steps, True, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_remote_spam(step.then_steps, inside_loop, function_name, smells)
+            _check_remote_spam(step.else_steps, inside_loop, function_name, smells)
+
+
+def _find_remote_sends_in_body(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            if _REMOTE_SEND_RE.search(step.label):
+                smells.append(Smell(
+                    rule="remote-spam",
+                    severity=SmellSeverity.WARNING,
+                    message=f"Remote :Fire*() inside frame signal handler in function '{function_name}': "
+                            f"fires every frame, add throttle — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _find_remote_sends_in_body(step.then_steps, function_name, smells)
+            _find_remote_sends_in_body(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _find_remote_sends_in_body(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _find_remote_sends_in_body(step.body_steps, function_name, smells)
+
+
+# -- Rule: task-spawn-storm --
+
+def _check_task_spawn_storm(
+    steps: tuple[ControlFlowStep, ...],
+    inside_loop: bool,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep) and inside_loop:
+            if _SPAWN_STORM_RE.search(step.label):
+                smells.append(Smell(
+                    rule="task-spawn-storm",
+                    severity=SmellSeverity.WARNING,
+                    message=f"task.spawn/coroutine.wrap inside loop in function '{function_name}': "
+                            f"scheduler overload, batch or queue instead — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, ClosureFlowStep):
+            if inside_loop and _SPAWN_STORM_RE.search(step.call_label):
+                smells.append(Smell(
+                    rule="task-spawn-storm",
+                    severity=SmellSeverity.WARNING,
+                    message=f"task.spawn/coroutine.wrap inside loop in function '{function_name}': "
+                            f"scheduler overload, batch or queue instead — {step.call_label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+            _check_task_spawn_storm(step.body_steps, inside_loop, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_task_spawn_storm(step.body_steps, True, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_task_spawn_storm(step.then_steps, inside_loop, function_name, smells)
+            _check_task_spawn_storm(step.else_steps, inside_loop, function_name, smells)
+
+
+# -- Rule: require-in-loop --
+
+def _check_require_in_loop(
+    steps: tuple[ControlFlowStep, ...],
+    inside_loop: bool,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep) and inside_loop:
+            if 'require(' in step.label:
+                smells.append(Smell(
+                    rule="require-in-loop",
+                    severity=SmellSeverity.WARNING,
+                    message=f"require() inside loop in function '{function_name}': "
+                            f"move outside the loop — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _check_require_in_loop(step.then_steps, inside_loop, function_name, smells)
+            _check_require_in_loop(step.else_steps, inside_loop, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_require_in_loop(step.body_steps, True, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_require_in_loop(step.body_steps, inside_loop, function_name, smells)
+
+
+# -- Rule: event-reconnect-loop --
+
+def _check_event_reconnect_loop(
+    steps: tuple[ControlFlowStep, ...],
+    inside_loop: bool,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ClosureFlowStep):
+            if inside_loop and ':Connect(' in step.call_label:
+                smells.append(Smell(
+                    rule="event-reconnect-loop",
+                    severity=SmellSeverity.WARNING,
+                    message=f":Connect() inside loop in function '{function_name}': "
+                            f"creates new connection every iteration, leaks memory",
+                    function_name=function_name,
+                ))
+            _check_event_reconnect_loop(step.body_steps, inside_loop, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_event_reconnect_loop(step.body_steps, True, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_event_reconnect_loop(step.then_steps, inside_loop, function_name, smells)
+            _check_event_reconnect_loop(step.else_steps, inside_loop, function_name, smells)
+
+
+# -- Rule: unsafe-tonumber --
+
+def _check_unsafe_tonumber(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            label = step.label.strip()
+            if _TONUMBER_RE.search(label) and not _TONUMBER_SAFE_RE.search(label):
+                smells.append(Smell(
+                    rule="unsafe-tonumber",
+                    severity=SmellSeverity.INFO,
+                    message=f"tonumber() without nil check in function '{function_name}': "
+                            f"add fallback like tonumber(x) or 0",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _check_unsafe_tonumber(step.then_steps, function_name, smells)
+            _check_unsafe_tonumber(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_unsafe_tonumber(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_unsafe_tonumber(step.body_steps, function_name, smells)
 
 
 def _count_total_steps(steps: tuple[ControlFlowStep, ...]) -> int:

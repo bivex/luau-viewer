@@ -1,6 +1,7 @@
 -- Triggers: deprecated-api, empty-function, infinite-loop, wait-in-loop
 -- Also triggers: magic-numbers, global-variable, instance-in-loop,
---                getchildren-in-loop, unprotected-remote, connect-leak
+--                getchildren-in-loop, unprotected-remote, connect-leak,
+--                pcall-ignored-result, infinite-yield-risk, unsafe-tonumber
 
 local REWARD_COINS = 15
 
@@ -73,6 +74,20 @@ function Smells.onCharacterAdded(player)
 	player.CharacterAdded:Connect(function(character)
 		print("Character loaded")
 	end)
+end
+
+function Smells.riskyCall()
+	pcall(function()
+		DataStore:SetAsync("key", {})
+	end)
+end
+
+function Smells.loadChild()
+	local obj = ReplicatedStorage:WaitForChild("DamageEvent")
+end
+
+function Smells.parseInput(value)
+	local n = tonumber(value)
 end
 
 return Smells
