@@ -1,4 +1,9 @@
 -- Triggers: deprecated-api, empty-function, infinite-loop, wait-in-loop
+-- Also triggers: magic-numbers, global-variable, instance-in-loop,
+--                getchildren-in-loop, unprotected-remote, connect-leak
+
+local REWARD_COINS = 15
+
 local Smells = {}
 
 function Smells.empty()
@@ -36,6 +41,38 @@ end
 function Smells.unreachable()
 	return 1
 	print("never reached")
+end
+
+function Smells.rewards(player)
+	player.leaderstats.Coins.Value += 15
+end
+
+function Smells.globalState()
+	_G.PlayerData = {}
+end
+
+function Smells.spawnParts()
+	for i = 1, 10 do
+		local part = Instance.new("Part")
+		part.Parent = workspace
+	end
+end
+
+function Smells.pollChildren()
+	while true do
+		local children = workspace:GetChildren()
+		break
+	end
+end
+
+function Smells.attackEnemy(enemy)
+	DamageRemote:FireServer(enemy, 25)
+end
+
+function Smells.onCharacterAdded(player)
+	player.CharacterAdded:Connect(function(character)
+		print("Character loaded")
+	end)
 end
 
 return Smells

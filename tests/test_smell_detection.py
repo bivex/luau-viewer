@@ -288,7 +288,10 @@ def test_smells_fixture():
     assert "deprecated-api" in rules
     assert "infinite-loop" in rules
     assert "wait-in-loop" in rules
-    assert report.smell_count >= 5
+    assert "magic-numbers" in rules
+    assert "global-variable" in rules
+    assert "connect-leak" in rules
+    assert report.smell_count >= 8
 
 
 # -- duplicate-condition --
@@ -501,3 +504,264 @@ def test_single_closure_not_flagged():
     smells = detector.detect(diag)
     rules = [s.rule for s in smells]
     assert "nested-closures" not in rules
+
+
+# -- magic-numbers --
+
+def test_magic_number_compound():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="player.leaderstats.Coins.Value += 15"),
+    ))
+    smells = detector.detect(diag)
+    mg = [s for s in smells if s.rule == "magic-numbers"]
+    assert len(mg) == 1
+    assert "15" in mg[0].message
+    assert mg[0].severity == SmellSeverity.INFO
+
+
+def test_magic_number_property():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="light.Brightness = 2"),
+    ))
+    smells = detector.detect(diag)
+    mg = [s for s in smells if s.rule == "magic-numbers"]
+    assert len(mg) == 1
+
+
+def test_magic_number_constant_def_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local MAX_DAMAGE = 100"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "magic-numbers" not in rules
+
+
+def test_magic_number_one_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="Coins.Value += 1"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "magic-numbers" not in rules
+
+
+def test_magic_number_plain_var_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="x = 15"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "magic-numbers" not in rules
+
+
+# -- global-variable --
+
+def test_global_variable_dot():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="_G.PlayerData = {}"),
+    ))
+    smells = detector.detect(diag)
+    gv = [s for s in smells if s.rule == "global-variable"]
+    assert len(gv) == 1
+    assert gv[0].severity == SmellSeverity.ERROR
+
+
+def test_global_variable_bracket():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label='_G["key"] = 42'),
+    ))
+    smells = detector.detect(diag)
+    gv = [s for s in smells if s.rule == "global-variable"]
+    assert len(gv) == 1
+
+
+def test_no_global_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local data = {}"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "global-variable" not in rules
+
+
+# -- instance-in-loop --
+
+def test_instance_in_for_loop():
+    diag = _diagram(_func("f",
+        ForInFlowStep(header="i = 1, 10", body_steps=(
+            ActionFlowStep(label='Instance.new("Part")'),
+        )),
+    ))
+    smells = detector.detect(diag)
+    il = [s for s in smells if s.rule == "instance-in-loop"]
+    assert len(il) == 1
+    assert il[0].severity == SmellSeverity.WARNING
+
+
+def test_instance_in_while_loop():
+    diag = _diagram(_func("f",
+        WhileFlowStep(condition="spawning", body_steps=(
+            ActionFlowStep(label='local part = Instance.new("Part")'),
+        )),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "instance-in-loop" in rules
+
+
+def test_instance_outside_loop_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label='local part = Instance.new("Part")'),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "instance-in-loop" not in rules
+
+
+# -- getchildren-in-loop --
+
+def test_getchildren_in_loop():
+    diag = _diagram(_func("f",
+        WhileFlowStep(condition="running", body_steps=(
+            ActionFlowStep(label="local children = workspace:GetChildren()"),
+        )),
+    ))
+    smells = detector.detect(diag)
+    gc = [s for s in smells if s.rule == "getchildren-in-loop"]
+    assert len(gc) == 1
+
+
+def test_getdescendants_in_loop():
+    diag = _diagram(_func("f",
+        ForInFlowStep(header="i = 1, 10", body_steps=(
+            ActionFlowStep(label="local desc = model:GetDescendants()"),
+        )),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "getchildren-in-loop" in rules
+
+
+def test_getchildren_outside_loop_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="local children = workspace:GetChildren()"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "getchildren-in-loop" not in rules
+
+
+# -- unprotected-remote --
+
+def test_fire_server_detected():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="DamageRemote:FireServer(enemy, 25)"),
+    ))
+    smells = detector.detect(diag)
+    ur = [s for s in smells if s.rule == "unprotected-remote"]
+    assert len(ur) == 1
+    assert ur[0].severity == SmellSeverity.ERROR
+
+
+def test_invoke_server_detected():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="ShopRemote:InvokeServer(item)"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "unprotected-remote" in rules
+
+
+def test_onserverevent_without_validation():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="Remote.OnServerEvent:Connect(function(player, damage)",
+            signature="function(player, damage)",
+            body_steps=(ActionFlowStep(label="enemy.Health -= damage"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    ur = [s for s in smells if s.rule == "unprotected-remote"]
+    assert len(ur) == 1
+    assert "type validation" in ur[0].message
+
+
+def test_onserverevent_with_type_check():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="Remote.OnServerEvent:Connect(function(player, damage)",
+            signature="function(player, damage)",
+            body_steps=(
+                IfFlowStep(
+                    condition='type(damage) ~= "number"',
+                    then_steps=(ActionFlowStep(label="return"),),
+                    else_steps=(ActionFlowStep(label="enemy.Health -= damage"),),
+                ),
+            ),
+        ),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "unprotected-remote" not in rules
+
+
+def test_no_remote_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="print('hello')"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "unprotected-remote" not in rules
+
+
+# -- connect-leak --
+
+def test_connect_without_cleanup():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="player.CharacterAdded:Connect(function(character)",
+            signature="function(character)",
+            body_steps=(ActionFlowStep(label="print('loaded')"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    cl = [s for s in smells if s.rule == "connect-leak"]
+    assert len(cl) == 1
+    assert cl[0].severity == SmellSeverity.WARNING
+
+
+def test_connect_with_maid_not_flagged():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="Maid:GiveTask(event:Connect(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="print('ok')"),),
+        ),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "connect-leak" not in rules
+
+
+def test_connect_with_disconnect_not_flagged():
+    diag = _diagram(_func("f",
+        ClosureFlowStep(
+            call_label="local conn = event:Connect(function()",
+            signature="function()",
+            body_steps=(ActionFlowStep(label="print('ok')"),),
+        ),
+        ActionFlowStep(label="conn:Disconnect()"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "connect-leak" not in rules
+
+
+def test_no_connect_not_flagged():
+    diag = _diagram(_func("f",
+        ActionFlowStep(label="print('no events')"),
+    ))
+    smells = detector.detect(diag)
+    rules = [s.rule for s in smells]
+    assert "connect-leak" not in rules

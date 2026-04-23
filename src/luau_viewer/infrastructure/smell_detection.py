@@ -46,6 +46,12 @@ class StepTreeSmellDetector(SmellDetector):
             _check_redundant_condition(function.steps, function.name, smells)
             _check_complex_condition(function.steps, function.name, smells)
             _check_nested_closures(function.steps, 0, function.name, smells)
+            _check_magic_numbers(function.steps, function.name, smells)
+            _check_global_variable(function.steps, function.name, smells)
+            _check_instance_in_loop(function.steps, False, function.name, smells)
+            _check_getchildren_in_loop(function.steps, False, function.name, smells)
+            _check_unprotected_remote(function.steps, function.name, smells)
+            _check_connect_leak(function, smells)
         return tuple(smells)
 
     # -- Rule: empty-function --
@@ -340,6 +346,13 @@ class StepTreeSmellDetector(SmellDetector):
 
 _DEPRECATED_CALLS = ("spawn(", "delay(", "wait(")
 _SELF_ASSIGN_RE = re.compile(r"(?P<left>[\w.:\[\]]+)\s*=\s*(?P<right>[\w.:\[\]]+)\s*$")
+_MAGIC_NUM_COMPOUND_RE = re.compile(r'[+\-*/]=\s*(\d+(?:\.\d+)?)\s*(?:--.*)?$')
+_MAGIC_NUM_PROPERTY_RE = re.compile(r'\.\w+\s*=\s*(\d+(?:\.\d+)?)\s*(?:--.*)?$')
+_CONSTANT_DEF_RE = re.compile(r'^local\s+[A-Z_][A-Z0-9_]*\s*=')
+_GLOBAL_RE = re.compile(r'_G\s*[\.\[]')
+_GETCHILDREN_RE = re.compile(r':Get(?:Children|Descendants)\(\)')
+_REMOTE_CALL_RE = re.compile(r':(?:Fire|Invoke)Server\(')
+_CLEANUP_MARKERS = ('Maid', 'Janitor', 'Trove', ':Disconnect()')
 
 
 def _check_self_assignment(
@@ -466,6 +479,223 @@ def _check_nested_closures(
             _check_nested_closures(step.else_steps, depth, function_name, smells)
         elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
             _check_nested_closures(step.body_steps, depth, function_name, smells)
+
+
+# -- Rule: magic-numbers --
+
+def _check_magic_numbers(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            label = step.label.strip()
+            if _CONSTANT_DEF_RE.match(label):
+                continue
+            for m in _MAGIC_NUM_COMPOUND_RE.finditer(label):
+                _flag_magic(m.group(1), label, function_name, smells)
+            for m in _MAGIC_NUM_PROPERTY_RE.finditer(label):
+                _flag_magic(m.group(1), label, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_magic_numbers(step.then_steps, function_name, smells)
+            _check_magic_numbers(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_magic_numbers(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_magic_numbers(step.body_steps, function_name, smells)
+
+
+def _flag_magic(
+    num_str: str,
+    label: str,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    val = float(num_str)
+    if val > 1:
+        display = int(val) if val == int(val) else val
+        smells.append(Smell(
+            rule="magic-numbers",
+            severity=SmellSeverity.INFO,
+            message=f"Magic number {display} in function '{function_name}': "
+                    f"extract to a named constant in Shared/Balance — {label[:60]}",
+            function_name=function_name,
+        ))
+
+
+# -- Rule: global-variable --
+
+def _check_global_variable(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            if _GLOBAL_RE.search(step.label):
+                smells.append(Smell(
+                    rule="global-variable",
+                    severity=SmellSeverity.ERROR,
+                    message=f"_G usage in function '{function_name}': "
+                            f"never use global state in production Roblox code — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _check_global_variable(step.then_steps, function_name, smells)
+            _check_global_variable(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_global_variable(step.body_steps, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_global_variable(step.body_steps, function_name, smells)
+
+
+# -- Rule: instance-in-loop --
+
+def _check_instance_in_loop(
+    steps: tuple[ControlFlowStep, ...],
+    inside_loop: bool,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep) and inside_loop:
+            if 'Instance.new(' in step.label:
+                smells.append(Smell(
+                    rule="instance-in-loop",
+                    severity=SmellSeverity.WARNING,
+                    message=f"Instance.new() inside loop in function '{function_name}': "
+                            f"use object pooling to avoid GC pressure — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _check_instance_in_loop(step.then_steps, inside_loop, function_name, smells)
+            _check_instance_in_loop(step.else_steps, inside_loop, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_instance_in_loop(step.body_steps, True, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_instance_in_loop(step.body_steps, inside_loop, function_name, smells)
+
+
+# -- Rule: getchildren-in-loop --
+
+def _check_getchildren_in_loop(
+    steps: tuple[ControlFlowStep, ...],
+    inside_loop: bool,
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep) and inside_loop:
+            if _GETCHILDREN_RE.search(step.label):
+                smells.append(Smell(
+                    rule="getchildren-in-loop",
+                    severity=SmellSeverity.WARNING,
+                    message=f":GetChildren() inside loop in function '{function_name}': "
+                            f"cache the result outside the loop",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, IfFlowStep):
+            _check_getchildren_in_loop(step.then_steps, inside_loop, function_name, smells)
+            _check_getchildren_in_loop(step.else_steps, inside_loop, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_getchildren_in_loop(step.body_steps, True, function_name, smells)
+        elif isinstance(step, ClosureFlowStep):
+            _check_getchildren_in_loop(step.body_steps, inside_loop, function_name, smells)
+
+
+# -- Rule: unprotected-remote --
+
+def _check_unprotected_remote(
+    steps: tuple[ControlFlowStep, ...],
+    function_name: str,
+    smells: list[Smell],
+) -> None:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            if _REMOTE_CALL_RE.search(step.label):
+                smells.append(Smell(
+                    rule="unprotected-remote",
+                    severity=SmellSeverity.ERROR,
+                    message=f"Remote call in function '{function_name}': "
+                            f"ensure server validates all parameters — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, ClosureFlowStep):
+            if 'OnServerEvent' in step.call_label or 'OnServerInvoke' in step.call_label:
+                if not _body_has_type_check(step.body_steps):
+                    smells.append(Smell(
+                        rule="unprotected-remote",
+                        severity=SmellSeverity.ERROR,
+                        message=f"Remote handler in function '{function_name}' has no type validation — "
+                                f"exploiters can send any data",
+                        function_name=function_name,
+                    ))
+            _check_unprotected_remote(step.body_steps, function_name, smells)
+        elif isinstance(step, IfFlowStep):
+            _check_unprotected_remote(step.then_steps, function_name, smells)
+            _check_unprotected_remote(step.else_steps, function_name, smells)
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            _check_unprotected_remote(step.body_steps, function_name, smells)
+
+
+def _body_has_type_check(steps: tuple[ControlFlowStep, ...]) -> bool:
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            if 'type(' in step.label or 'typeof(' in step.label:
+                return True
+        elif isinstance(step, IfFlowStep):
+            if 'type(' in step.condition or 'typeof(' in step.condition:
+                return True
+            if _body_has_type_check(step.then_steps) or _body_has_type_check(step.else_steps):
+                return True
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            if _body_has_type_check(step.body_steps):
+                return True
+        elif isinstance(step, ClosureFlowStep):
+            if _body_has_type_check(step.body_steps):
+                return True
+    return False
+
+
+# -- Rule: connect-leak --
+
+def _check_connect_leak(
+    function: FunctionControlFlow,
+    smells: list[Smell],
+) -> None:
+    all_labels = _collect_all_labels(function.steps)
+    has_connect = any(':Connect(' in label for label in all_labels)
+    if not has_connect:
+        return
+    has_cleanup = any(
+        any(marker in label for marker in _CLEANUP_MARKERS)
+        for label in all_labels
+    )
+    if not has_cleanup:
+        smells.append(Smell(
+            rule="connect-leak",
+            severity=SmellSeverity.WARNING,
+            message=f":Connect() in function '{function.name}' without cleanup — "
+                    f"use Maid/Janitor/Trove to prevent memory leaks",
+            function_name=function.name,
+        ))
+
+
+def _collect_all_labels(steps: tuple[ControlFlowStep, ...]) -> list[str]:
+    labels: list[str] = []
+    for step in steps:
+        if isinstance(step, ActionFlowStep):
+            labels.append(step.label)
+        elif isinstance(step, IfFlowStep):
+            labels.extend(_collect_all_labels(step.then_steps))
+            labels.extend(_collect_all_labels(step.else_steps))
+        elif isinstance(step, (WhileFlowStep, ForInFlowStep, NumericForFlowStep, RepeatUntilFlowStep)):
+            labels.extend(_collect_all_labels(step.body_steps))
+        elif isinstance(step, ClosureFlowStep):
+            labels.append(step.call_label)
+            labels.extend(_collect_all_labels(step.body_steps))
+    return labels
 
 
 def _count_total_steps(steps: tuple[ControlFlowStep, ...]) -> int:
