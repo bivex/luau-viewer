@@ -481,7 +481,18 @@ def _check_nested_closures(
     smells: list[Smell],
 ) -> None:
     for step in steps:
-        if isinstance(step, ClosureFlowStep):
+        if isinstance(step, ActionFlowStep):
+            # ANTLR inlines nested closures as single labels — count function( occurrences
+            func_count = step.label.count('function(') + step.label.count('function (')
+            if func_count > 1:
+                smells.append(Smell(
+                    rule="nested-closures",
+                    severity=SmellSeverity.WARNING,
+                    message=f"{func_count} nested closures in function '{function_name}' — "
+                            f"callback hell, refactor with named functions",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, ClosureFlowStep):
             new_depth = depth + 1
             if new_depth > 1:
                 smells.append(Smell(
@@ -630,12 +641,22 @@ def _check_unprotected_remote(
 ) -> None:
     for step in steps:
         if isinstance(step, ActionFlowStep):
-            if _REMOTE_CALL_RE.search(step.label):
+            label = step.label.strip()
+            if _REMOTE_CALL_RE.search(label):
                 smells.append(Smell(
                     rule="unprotected-remote",
                     severity=SmellSeverity.ERROR,
                     message=f"Remote call in function '{function_name}': "
-                            f"ensure server validates all parameters — {step.label.strip()[:60]}",
+                            f"ensure server validates all parameters — {label[:60]}",
+                    function_name=function_name,
+                ))
+            # ANTLR inlines OnServerEvent handlers as single ActionFlowStep
+            if _CRITICAL_HANDLER_RE.search(label) and 'type(' not in label and 'typeof(' not in label:
+                smells.append(Smell(
+                    rule="unprotected-remote",
+                    severity=SmellSeverity.ERROR,
+                    message=f"Remote handler in function '{function_name}' has no type validation — "
+                            f"exploiters can send any data",
                     function_name=function_name,
                 ))
         elif isinstance(step, ClosureFlowStep):
@@ -723,7 +744,17 @@ def _check_yield_in_critical(
     smells: list[Smell],
 ) -> None:
     for step in steps:
-        if isinstance(step, ClosureFlowStep):
+        if isinstance(step, ActionFlowStep):
+            # ANTLR inlines closures as single ActionFlowStep labels
+            if _CRITICAL_HANDLER_RE.search(step.label) and _YIELD_IN_HANDLER_RE.search(step.label):
+                smells.append(Smell(
+                    rule="yield-in-critical",
+                    severity=SmellSeverity.ERROR,
+                    message=f"Yield inside critical handler in function '{function_name}': "
+                            f"blocks the thread and creates race conditions — {step.label.strip()[:60]}",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, ClosureFlowStep):
             if _CRITICAL_HANDLER_RE.search(step.call_label):
                 _find_yields_in_body(step.body_steps, function_name, smells)
             _check_yield_in_critical(step.body_steps, function_name, smells)
@@ -952,7 +983,16 @@ def _check_event_reconnect_loop(
     smells: list[Smell],
 ) -> None:
     for step in steps:
-        if isinstance(step, ClosureFlowStep):
+        if isinstance(step, ActionFlowStep) and inside_loop:
+            if ':Connect(' in step.label:
+                smells.append(Smell(
+                    rule="event-reconnect-loop",
+                    severity=SmellSeverity.WARNING,
+                    message=f":Connect() inside loop in function '{function_name}': "
+                            f"creates new connection every iteration, leaks memory",
+                    function_name=function_name,
+                ))
+        elif isinstance(step, ClosureFlowStep):
             if inside_loop and ':Connect(' in step.call_label:
                 smells.append(Smell(
                     rule="event-reconnect-loop",

@@ -202,18 +202,55 @@ class TestStyleSmells:
 # ---------------------------------------------------------------------------
 
 
+class TestEdgeCases:
+    def test_detects_infinite_loop(self):
+        report = _file("edge_cases.luau")
+        assert "infinite-loop" in _rules(report)
+
+    def test_detects_long_function(self):
+        report = _file("edge_cases.luau")
+        assert "long-function" in _rules(report)
+
+    def test_detects_nested_closures_inlined(self):
+        report = _file("edge_cases.luau")
+        assert "nested-closures" in _rules(report)
+
+    def test_detects_yield_in_critical_inlined(self):
+        report = _file("edge_cases.luau")
+        assert "yield-in-critical" in _rules(report)
+
+    def test_detects_unprotected_remote_server_inlined(self):
+        report = _file("edge_cases.luau")
+        assert "unprotected-remote" in _rules(report)
+
+    def test_detects_event_reconnect_inlined(self):
+        report = _file("edge_cases.luau")
+        assert "event-reconnect-loop" in _rules(report)
+
+    def test_smell_count(self):
+        report = _file("edge_cases.luau")
+        assert report.smell_count >= 7
+
+
 class TestDirectoryScan:
     def test_detects_all_files(self):
         report = _service().detect_directory_smells(
             DetectDirectorySmellsCommand(root_path=FIXTURES)
         )
-        assert report.file_count == 5
+        assert report.file_count == 6
 
     def test_total_smells(self):
         report = _service().detect_directory_smells(
             DetectDirectorySmellsCommand(root_path=FIXTURES)
         )
-        assert report.total_smells >= 35
+        assert report.total_smells >= 45
+
+    def test_all_30_rules_triggered(self):
+        report = _service().detect_directory_smells(
+            DetectDirectorySmellsCommand(root_path=FIXTURES)
+        )
+        all_rules = {s.rule for f in report.files for s in f.smells}
+        assert len(all_rules) == 30
 
     def test_clean_file_has_zero(self):
         report = _service().detect_directory_smells(
